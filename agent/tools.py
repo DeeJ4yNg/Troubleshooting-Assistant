@@ -1,16 +1,20 @@
 import os
 import re
 import subprocess
-from typing import List, Dict, Any
-try:
-    from duckduckgo_search import DDGS
-except ImportError:
-    from ddgs import DDGS
+import numpy as np
+import logging
+from typing import List, Dict, Any, Optional
+from ddgs import DDGS
 from agent.memory import SQLiteMemory
+from agent.knowledge_manager import KnowledgeManager
+
+# 配置日志记录器
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 class ListLogFilesTool:
     name = "list_log_files"
-    description = "List all log files in a specified directory path"
+    description = "List all log files in a specified directory path. Example: {{\"path\": \"C:/Windows/Logs\"}} to list all log files in Windows logs directory."
     
     def __call__(self, path: str) -> List[str]:
         """List all log files in the specified directory."""
@@ -33,7 +37,7 @@ class ListLogFilesTool:
 
 class ReadErrorLogsTool:
     name = "read_error_logs"
-    description = "Read and extract error messages from a log file"
+    description = "Read and extract error messages from a log file. Example: {{\"file_path\": \"C:/Windows/Logs/System.evtx\", \"max_lines\": 100}} to read errors from system event log."
     
     def __call__(self, file_path: str, max_lines: int = 100) -> List[str]:
         """Read error messages from the specified log file."""
@@ -66,7 +70,7 @@ class ReadErrorLogsTool:
 
 class WritePS1FileTool:
     name = "write_ps1_file"
-    description = "Create a PowerShell script file with the given content"
+    description = "Create a PowerShell script file with the given content. Example: {{\"file_path\": \"C:/temp/fix_settings.ps1\", \"content\": \"Get-AppxPackage Microsoft.Windows.SettingsApp | Reset-AppxPackage\"}} to create a script that resets Settings app."
     
     def __call__(self, file_path: str, content: str) -> str:
         """Create a PowerShell script file."""
@@ -79,7 +83,7 @@ class WritePS1FileTool:
 
 class RunPS1TestTool:
     name = "run_ps1_test"
-    description = "Run a PowerShell script and return the output"
+    description = "Run a PowerShell script and return the output. Example: {{\"file_path\": \"C:/temp/fix_settings.ps1\"}} to execute the previously created PowerShell script."
     
     def __call__(self, file_path: str) -> str:
         """Run a PowerShell script and return the output."""
@@ -108,7 +112,7 @@ class RunPS1TestTool:
 
 class OnlineSearchTool:
     name = "online_search"
-    description = "Search the internet using DuckDuckGo for the given query"
+    description = "Search the internet using DuckDuckGo for the given query. Example: {{\"query\": \"Windows 11 Settings app not opening fix\", \"max_results\": 3}} to search for troubleshooting solutions."
     
     def __call__(self, query: str, max_results: int = 5) -> List[Dict[str, str]]:
         """Search the internet using DuckDuckGo."""
@@ -130,29 +134,177 @@ class OnlineSearchTool:
 
 class KnowledgeRetrievalTool:
     name = "knowledge_retrieval"
-    description = "Retrieve knowledge from the SQLite database using RAG"
+    description = "Retrieve knowledge from the knowledge base using hybrid search (BM25 + ANN). Example: {{'query': 'Windows Settings app repair methods', 'limit': 5}} to retrieve relevant information."
     
-    def __init__(self, memory: SQLiteMemory):
-        self.memory = memory
-    
-    def __call__(self, query: str, limit: int = 5) -> List[Dict[str, str]]:
-        """Retrieve knowledge from the SQLite database."""
+    def __init__(self):
+        """初始化知识库检索工具。"""
         try:
-            results = self.memory.retrieve_knowledge(query, limit=limit)
-            return results
+            # 使用KnowledgeManager代替SQLiteMemory
+            self.knowledge_manager = KnowledgeManager()
+            # 尝试导入嵌入模型
+            self.embedding_model = self._init_embedding_model()
+            logger.info("KnowledgeRetrievalTool initialized successfully")
         except Exception as e:
-            return [{"error": str(e)}]
-
-class ReportResultTool:
-    name = "report_result"
-    description = "Report the final troubleshooting result and summary to the user"
+            logger.error(f"Failed to initialize KnowledgeRetrievalTool: {e}")
+            # 创建一个简单的备份实现，只支持关键词搜索
+            self.knowledge_manager = None
     
-    def __call__(self, summary: str, result: str) -> str:
-        """Report the troubleshooting result."""
+    def _init_embedding_model(self) -> Optional[Any]:
+        """初始化嵌入模型"""
         try:
-            return f"# Troubleshooting Result\n\n## Summary\n{summary}\n\n## Final Result\n{result}"
+            # 尝试导入OpenAI模型（如果可用）
+            try:
+                import openai
+                # 检查API密钥
+                if os.environ.get("OPENAI_API_KEY"):
+                    return "openai"
+            except ImportError:
+                pass
+            
+            # 尝试导入其他嵌入模型库
+            # 这里可以添加其他嵌入模型的支持
+            
+            return None
+        except Exception:
+            return None
+    
+    def _generate_embedding(self, text: str) -> Optional[List[float]]:
+        """生成文本的嵌入向量"""
+        try:
+            if self.embedding_model == "openai":
+                import openai
+                response = openai.Embedding.create(
+                    input=text,
+                    model="text-embedding-ada-002"
+                )
+                return response['data'][0]['embedding']
+            
+            # 如果没有嵌入模型，返回默认向量
+            # 注意：在实际应用中，应该使用适当的嵌入模型
+            # 这里仅作为占位符
+            return [0.0] * 1536
         except Exception as e:
-            return f"Error: {str(e)}"
+            logger.error(f"Failed to generate embedding: {e}")
+            return [0.0] * 1536
+    
+    def __call__(self, query: str, limit: int = 5, alpha: float = 0.5) -> List[Dict[str, Any]]:
+        """使用混合搜索检索知识
+        
+        Args:
+            query: 查询文本
+            limit: 返回结果数量限制
+            alpha: 向量搜索权重 (0-1)，BM25权重为1-alpha
+            
+        Returns:
+            搜索结果列表
+        """
+        # 验证输入参数
+        if not query or not isinstance(query, str):
+            logger.error("Invalid query parameter")
+            return []
+        
+        # 确保limit是有效的正整数
+        limit = max(1, min(100, int(limit)))
+        
+        # 确保alpha在有效范围内
+        alpha = max(0.0, min(1.0, float(alpha)))
+        
+        try:
+            # 检查knowledge_manager是否初始化成功
+            if self.knowledge_manager is None:
+                logger.error("Knowledge manager is not initialized")
+                return []
+            
+            # 尝试执行混合搜索，但考虑到可能的错误
+            try:
+                # 生成查询嵌入向量
+                query_embedding = self._generate_embedding(query)
+                
+                # 执行混合搜索
+                results = self.knowledge_manager.hybrid_search(
+                    query=query,
+                    query_embedding=query_embedding,
+                    limit=limit,
+                    alpha=alpha
+                )
+                
+                # 格式化结果
+                formatted_results = []
+                for result in results:
+                    formatted_results.append({
+                        "topic": result.get("topic", ""),
+                        "content": result.get("content", ""),
+                        "source": result.get("source", ""),
+                        "score": result.get("score", 0)
+                    })
+                
+                logger.info("Hybrid search completed successfully")
+                return formatted_results
+            except Exception as hybrid_error:
+                logger.warning(f"Hybrid search failed, falling back to BM25: {hybrid_error}")
+                
+                # 如果混合搜索失败，回退到BM25搜索
+                try:
+                    # 尝试使用BM25搜索
+                    bm25_results = self.knowledge_manager.search_bm25(query, limit)
+                    # 获取详细信息
+                    detailed_results = []
+                    for doc_id, score in bm25_results:
+                        # 查询详细信息
+                        try:
+                            knowledge_item = self.knowledge_manager.get_knowledge_by_id(doc_id)
+                            if knowledge_item:
+                                detailed_results.append({
+                                    "id": doc_id,
+                                    "topic": knowledge_item.get("topic", ""),
+                                    "content": knowledge_item.get("content", ""),
+                                    "source": knowledge_item.get("source", ""),
+                                    "created_at": knowledge_item.get("created_at", ""),
+                                    "score": score
+                                })
+                        except Exception as item_error:
+                            logger.error(f"Error retrieving knowledge item {doc_id}: {item_error}")
+                    
+                    logger.info("BM25 search completed successfully")
+                    return detailed_results
+                except Exception as bm25_error:
+                    logger.warning(f"BM25 search failed, falling back to simple search: {bm25_error}")
+                    
+                    # 最后回退到简单的SQL查询
+                    try:
+                        import sqlite3
+                        # 假设KnowledgeManager有一个db_path属性
+                        db_path = getattr(self.knowledge_manager, 'db_path', ':memory:')
+                        conn = sqlite3.connect(db_path)
+                        cursor = conn.cursor()
+                        
+                        cursor.execute('''
+                        SELECT id, topic, content, source, created_at 
+                        FROM knowledge_items 
+                        WHERE topic LIKE ? OR content LIKE ? 
+                        LIMIT ?
+                        ''', (f"%{query}%", f"%{query}%", limit))
+                        
+                        results = cursor.fetchall()
+                        conn.close()
+                        
+                        simple_results = [{
+                            "id": result[0],
+                            "topic": result[1],
+                            "content": result[2],
+                            "source": result[3],
+                            "created_at": result[4],
+                            "score": 1.0
+                        } for result in results]
+                        
+                        logger.info("Simple SQL search completed successfully")
+                        return simple_results
+                    except Exception as simple_error:
+                        logger.error(f"Simple SQL search failed: {simple_error}")
+                        return []
+        except Exception as e:
+            logger.error(f"Unexpected error during knowledge retrieval: {e}")
+            return []
 
 # Create tool instances
 memory = SQLiteMemory()
@@ -162,8 +314,7 @@ read_error_logs_tool = ReadErrorLogsTool()
 write_ps1_file_tool = WritePS1FileTool()
 run_ps1_test_tool = RunPS1TestTool()
 online_search_tool = OnlineSearchTool()
-knowledge_retrieval_tool = KnowledgeRetrievalTool(memory)
-report_result_tool = ReportResultTool()
+knowledge_retrieval_tool = KnowledgeRetrievalTool()  # 不再需要传入memory参数
 
 # Tool registry for easy access
 tools = {
@@ -172,6 +323,5 @@ tools = {
     "write_ps1_file": write_ps1_file_tool,
     "run_ps1_test": run_ps1_test_tool,
     "online_search": online_search_tool,
-    "knowledge_retrieval": knowledge_retrieval_tool,
-    "report_result": report_result_tool
+    "knowledge_retrieval": knowledge_retrieval_tool
 }

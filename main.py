@@ -39,19 +39,38 @@ class WindowsTroubleshootingUI:
         """Display the generated troubleshooting plan."""
         self.console.print("\n[bold yellow]Generated Troubleshooting Plan:[/bold yellow]")
         
-        table = Table(show_header=True, header_style="bold magenta")
-        table.add_column("Task ID")
+        table = Table(show_header=True, header_style="bold magenta", expand=False)
+        table.add_column("Task ID", style="dim")
         table.add_column("Description")
         table.add_column("Tool")
-        table.add_column("Params")
+        table.add_column("Params", style="dim")
         
-        for task in plan.get("tasks", []):
-            params_str = json.dumps(task.get("params", {}), indent=2)
+        # 确保plan是字典且包含tasks键
+        if not isinstance(plan, dict):
+            self.console.print("[bold red]Error: Invalid plan format![/bold red]")
+            return
+            
+        tasks = plan.get("tasks", [])
+        if not tasks:
+            self.console.print("[bold yellow]No tasks in the plan.[/bold yellow]")
+            return
+        
+        self.console.print(f"Found {len(tasks)} tasks in the plan.")
+        
+        for task in tasks:
+            # 简化params显示，避免复杂的多行JSON
+            params = task.get("params", {})
+            if isinstance(params, dict) and params:
+                params_str = ", ".join([f"{k}={v}" for k, v in params.items()])
+            else:
+                params_str = "{}"
+                
+            # 确保所有字段都有默认值
             table.add_row(
-                task.get("task_id"),
-                task.get("description"),
-                task.get("tool"),
-                params_str
+                task.get("task_id", "N/A"),
+                task.get("description", "N/A"),
+                task.get("tool", "N/A"),
+                params_str[:50] + "..." if len(params_str) > 50 else params_str
             )
         
         self.console.print(table)
@@ -281,4 +300,5 @@ class WindowsTroubleshootingUI:
 
 if __name__ == "__main__":
     ui = WindowsTroubleshootingUI()
+    ui.agent.print_mermaid_workflow()
     ui.run()

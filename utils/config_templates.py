@@ -72,14 +72,14 @@ TEMPLATES = {
 # Default implementation templates for common methods
 IMPLEMENTATION_TEMPLATES = {
     "create_plan": """
-    def _create_plan(self, state: AgentState) -> AgentState:
+    def _create_plan(self, state: dict) -> dict:
         """Create an initial plan based on user query."""
         user_query = state.get("user_query", "")
         
         # Generate plan using LLM
         prompt = ChatPromptTemplate.from_messages([
             ("system", "You are a helpful assistant that creates structured plans for solving problems."),
-            ("user", "Create a step-by-step plan to solve the following problem:\n{query}")
+            ("user", "Create a step-by-step plan to solve the following problem:\n{{query}}")
         ])
         
         chain = prompt | self.llm | StrOutputParser()
@@ -103,7 +103,7 @@ IMPLEMENTATION_TEMPLATES = {
 """,
     
     "execute_task": """
-    def _execute_task(self, state: AgentState) -> AgentState:
+    def _execute_task(self, state: dict) -> dict:
         """Execute the next task in the plan."""
         plan = state.get("plan", {})
         tasks = plan.get("tasks", [])
@@ -134,7 +134,7 @@ IMPLEMENTATION_TEMPLATES = {
 """,
     
     "observe_result": """
-    def _observe_result(self, state: AgentState) -> AgentState:
+    def _observe_result(self, state: dict) -> dict:
         """Observe and analyze tool results."""
         tool_result = state.get("tool_result")
         current_task = state.get("current_task")
@@ -157,14 +157,14 @@ IMPLEMENTATION_TEMPLATES = {
         if tool_result:
             conversation_history.append({
                 "role": "assistant",
-                "content": f"Tool result: {str(tool_result)}"
+                "content": f"Tool result: {{str(tool_result)}}"
             })
         
         return state
 """,
     
     "should_continue": """
-    def _should_continue(self, state: AgentState) -> str:
+    def _should_continue(self, state: dict) -> str:
         """Decide whether to continue the workflow or finish."""
         plan = state.get("plan", {})
         tasks = plan.get("tasks", [])

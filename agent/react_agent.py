@@ -12,6 +12,10 @@ from typing_extensions import TypedDict
 from langgraph.channels.base import BaseChannel
 from langgraph.channels.last_value import LastValue
 from langgraph.channels.ephemeral_value import EphemeralValue
+from rich.console import Console
+from rich.panel import Panel
+from rich.prompt import Prompt
+from rich.table import Table
 
 # Load environment variables
 load_dotenv()
@@ -35,6 +39,7 @@ class ReactAgent:
         openai_api_key = os.getenv("OPENAI_API_KEY")
         openai_model = os.getenv("OPENAI_MODEL", "gpt-3.5-turbo")
         api_base = os.getenv("OPENAI_API_BASE")
+        self.console = Console()
         
         if not openai_api_key:
             raise ValueError("OPENAI_API_KEY environment variable is not set")
@@ -111,13 +116,12 @@ class ReactAgent:
         {user_query}
         
         The plan should include multiple specific tasks that can be executed using the following tools:
-        - list_log_files: List log files in a directory (params: path)
-        - read_error_logs: Read error messages from log files (params: file_path, max_lines)
-        - write_ps1_file: Create PowerShell scripts (params: file_path, content)
-        - run_ps1_test: Run PowerShell scripts (params: file_path)
-        - online_search: Search the internet (params: query, max_results)
-        - knowledge_retrieval: Retrieve knowledge from database (params: query, limit)
-        - report_result: Report final results (params: summary, result)
+        - list_log_files: List log files in a directory (Example params: {{"path": "C:/Windows/Logs"}})
+        - read_error_logs: Read error messages from log files (Example params: {{"file_path": "C:/Windows/Logs/System.evtx", "max_lines": 100}})
+        - write_ps1_file: Create PowerShell scripts (Example params: {{"file_path": "C:/temp/fix_settings.ps1", "content": "Get-AppxPackage Microsoft.Windows.SettingsApp | Reset-AppxPackage"}})
+        - run_ps1_test: Run PowerShell scripts (Example params: {{"file_path": "C:/temp/fix_settings.ps1"}})
+        - online_search: Search the internet (Example params: {{"query": "Windows 11 Settings app not opening fix", "max_results": 3}})
+        - knowledge_retrieval: Retrieve knowledge from database (Example params: {{"query": "Windows Settings app repair methods", "limit": 5}})
         
         Create a comprehensive plan with at least 3-5 tasks that thoroughly address the issue.
         Each task should have:
@@ -143,6 +147,9 @@ class ReactAgent:
         Make sure to escape all curly braces in the JSON structure. The user's query is: {user_query}
         """)
         
+        if state.get("plan"):
+            return state
+
         chain = prompt | self.llm | StrOutputParser()
         plan_str = chain.invoke({"user_query": state["user_query"]})
         print(f"Generated plan: {plan_str}")  # Debug print
@@ -180,11 +187,24 @@ class ReactAgent:
         # will happen in the main loop. For now, we'll just pass through the state.
         print("Getting human confirmation...")
         
-        # Get pending tasks from the plan in the state
-        plan = state.get("plan", {})
-        pending_tasks = plan.get("tasks", [])
+        # If there's already pending_tool_execution in state, use it directly
+        pending_execution = state.get("pending_tool_execution")
+        if pending_execution:
+            return state
         
-        current_task = pending_tasks[0]
+        # If no pending execution, find the first non-completed task
+        plan = state.get("plan", {})
+        tasks = plan.get("tasks", [])
+        
+        current_task = None
+        for task in tasks:
+            if task.get("status") != "completed":
+                current_task = task
+                break
+        
+        if not current_task:
+            return state
+        
         tool_name = current_task.get("tool")
         params = current_task.get("params", {})
         
@@ -224,12 +244,13 @@ class ReactAgent:
         # Get the current task from the plan
         plan = state.get("plan", {})
         tasks = plan.get("tasks", [])
-        
+
         # Find the first pending task
         current_task = None
         for task in tasks:
             if task.get("status") != "completed":
                 current_task = task
+                print(f"Executing task: {current_task}")  # Debug print
                 break
         
         if not current_task:
@@ -298,20 +319,21 @@ class ReactAgent:
             
         tool_name = pending_execution["tool_name"]
         params = pending_execution["params"]
-        
+        confirm = Prompt.ask(f"[bold yellow]Are you sure you want to execute tool: {tool_name} with params: {params}? (yes/no)[/bold yellow]")
+        if confirm.lower() != "yes":
+            return state
         # Get the tool instance
         tool = tools.get(tool_name)
         if not tool:
             tool_result = f"Error: Tool '{tool_name}' not found"
         else:
             # Execute the tool
-            print(f"Executing tool: {tool_name} with params: {params}")  # Debug print
+            self.console.print(f"Executing tool: {tool_name} with params: {params}")  # Debug print
             try:
                 tool_result = tool(**params)
             except Exception as e:
                 tool_result = f"Error executing tool '{tool_name}': {str(e)}"
         
-        print(tool_result)
         # Clear pending execution and return result
         return {
             "user_query": state["user_query"],
@@ -326,65 +348,15 @@ class ReactAgent:
     def _observe_result(self, state: AgentState) -> Dict:
         """Observe and analyze the tool execution result using LLM intelligence."""
         tool_result = state.get("tool_result")
-        current_task = state.get("current_task", {})
+        current_task = state.get("current_task") or {}
         task_description = current_task.get("description", "Unknown task")
         observation = {
             "success": False,
-            "details": "",
-            "next_steps": "",
-            "plan_modifications": [],
-            "observation": ""
+            #"details": "",
+            #"next_steps": "",
+            "plan_modifications": []
+            #"observation": ""
         }
-        
-        # Analyze the tool result based on its type and content
-        if tool_result is None:
-            observation["details"] = "No result returned from tool execution."
-            observation["observation"] = "No result returned from tool execution."
-            observation["next_steps"] = "Consider retrying the task or using an alternative approach."
-        elif isinstance(tool_result, str):
-            # Handle string results (most common)
-            if tool_result.startswith("Error:") or tool_result.startswith("error"):
-                observation["details"] = f"Task failed with error: {tool_result}"
-                observation["observation"] = f"Error occurred: {tool_result[:100]}..." if len(tool_result) > 100 else f"Error occurred: {tool_result}"
-                observation["next_steps"] = "Review the error and adjust the approach accordingly."
-            else:
-                observation["success"] = True
-                observation["details"] = f"Task completed successfully: {tool_result}"
-                observation["observation"] = tool_result[:100] + "..." if len(tool_result) > 100 else tool_result
-                observation["next_steps"] = "Proceed with the next task in the plan."
-        elif isinstance(tool_result, list):
-            # Handle list results (search results, log files, etc.)
-            if len(tool_result) == 0:
-                observation["details"] = "Tool returned empty result set."
-                observation["observation"] = "Empty result set"
-                observation["next_steps"] = "Consider refining the query or trying a different approach."
-            elif len(tool_result) == 1 and isinstance(tool_result[0], dict) and "error" in tool_result[0]:
-                # Error in list format
-                observation["details"] = f"Task failed with error: {tool_result[0]['error']}"
-                observation["observation"] = f"Error occurred: {str(tool_result[0]['error'])[:100]}..."
-                observation["next_steps"] = "Review the error and adjust the approach accordingly."
-            else:
-                observation["success"] = True
-                observation["details"] = f"Task returned {len(tool_result)} items."
-                observation["observation"] = f"Retrieved {len(tool_result)} items"
-                observation["next_steps"] = "Proceed with the next task in the plan."
-        elif isinstance(tool_result, dict):
-            # Handle dict results
-            if "error" in tool_result:
-                observation["details"] = f"Task failed with error: {tool_result['error']}"
-                observation["observation"] = f"Error occurred: {str(tool_result['error'])[:100]}..."
-                observation["next_steps"] = "Review the error and adjust the approach accordingly."
-            else:
-                observation["success"] = True
-                observation["details"] = f"Task completed with structured result: {tool_result}"
-                observation["observation"] = f"Structured data received"
-                observation["next_steps"] = "Proceed with the next task in the plan."
-        else:
-            # Handle any other result types
-            observation["success"] = True
-            observation["details"] = f"Task completed with result: {tool_result}"
-            observation["observation"] = str(tool_result)[:100] + "..." if len(str(tool_result)) > 100 else str(tool_result)
-            observation["next_steps"] = "Proceed with the next task in the plan."
         
         # Use LLM to analyze the result and suggest plan modifications
         try:
@@ -408,15 +380,25 @@ class ReactAgent:
             {plan_tasks}
             
             Based on the tool result and conversation history, determine if:
-            1. The plan should be modified (add new tasks, remove unnecessary tasks, change task order)
+            1. The plan should be modified (add new tasks, remove unnecessary or failed tasks, change task order)
             2. Additional investigation is needed
             3. The troubleshooting approach should be adjusted
+            4. Only use the tools that are available in the tools available list .
             
             Before adding new tasks, verify they don't duplicate previous actions from conversation history.
             If you see a pattern of repeated tool executions without progress, change the approach.
+
+            Tools available:
+            - list_log_files: List log files in a directory (Example params: {{"path": "C:/Windows/Logs"}})
+            - read_error_logs: Read error messages from log files (Example params: {{"file_path": "C:/Windows/Logs/System.evtx", "max_lines": 100}})
+            - write_ps1_file: Create PowerShell scripts (Example params: {{"file_path": "C:/temp/fix_settings.ps1", "content": "Get-AppxPackage Microsoft.Windows.SettingsApp | Reset-AppxPackage"}})
+            - run_ps1_test: Run PowerShell scripts (Example params: {{"file_path": "C:/temp/fix_settings.ps1"}})
+            - online_search: Search the internet (Example params: {{"query": "Windows 11 Settings app not opening fix", "max_results": 3}})
+            - knowledge_retrieval: Retrieve knowledge from database (Example params: {{"query": "Windows Settings app repair methods", "limit": 5}})
             
             Respond with a JSON object containing:
             {{
+                "success": true/false,
                 "analysis": "Brief analysis of the result",
                 "should_modify_plan": true/false,
                 "modifications": [
@@ -432,6 +414,7 @@ class ReactAgent:
             Keep modifications minimal and focused. If no changes are needed, set should_modify_plan to false.
             Always prioritize making forward progress and avoiding repetition.
 
+            REMEMBER: NO DUPLICATE TASKS IN THE PLAN!
             """)
             
             plan_tasks_info = "\n".join([
@@ -447,18 +430,21 @@ class ReactAgent:
                 for msg in state.get("conversation_history", [])[-10:]  # Include last 10 messages to keep context manageable
             ])
             
-            analysis_result = chain.invoke({
+            with self.console.status("[bold green]Analyzing tool result...[/bold green]") as status:
+                analysis_result = chain.invoke({
                 "user_query": state["user_query"],
                 "conversation_history": conversation_history_text,
                 "task_description": task_description,
                 "tool_result": str(tool_result),
                 "plan_tasks": plan_tasks_info
-            })
+                })
             
             # Try to parse the LLM response as JSON
             import json
             try:
                 analysis_json = json.loads(analysis_result)
+                self.console.print(analysis_json)
+                observation["success"] = analysis_json.get("success", False)
                 observation["llm_analysis"] = analysis_json.get("analysis", "")
                 observation["should_modify_plan"] = analysis_json.get("should_modify_plan", False)
                 observation["plan_modifications"] = analysis_json.get("modifications", [])
@@ -479,9 +465,9 @@ class ReactAgent:
             self.memory.save_observation(
                 plan_id=state["plan_id"],
                 task_id=state["current_task"]["task_id"],
-                observation=observation["observation"],
+                observation="",
                 success=observation["success"],
-                details=observation["details"],
+                details={},
                 llm_analysis={
                     "analysis": observation.get("llm_analysis", ""),
                     "should_modify_plan": observation.get("should_modify_plan", False),
@@ -495,7 +481,7 @@ class ReactAgent:
         conversation_history = state.get("conversation_history", []).copy()
         conversation_history.append({
             "role": "system",
-            "content": f"Observation: {observation['observation']}. Details: {observation['details']}. LLM Analysis: {observation.get('llm_analysis', '')}"
+            "content": f"Tool_Result: {tool_result}. modifications: {observation.get('plan_modifications', '')}. LLM Analysis: {observation.get('llm_analysis', '')}"
         })
         
         return {
@@ -508,6 +494,7 @@ class ReactAgent:
             "observation": observation
         }
     
+
     def _modify_plan(self, state: AgentState) -> Dict:
         """Modify the plan based on the tool result and LLM analysis."""
         # Mark current task as completed
@@ -517,124 +504,8 @@ class ReactAgent:
                     task["status"] = "completed"
                     break
         
-        # Use LLM to analyze tool results and suggest plan modifications
-        tool_result = state.get("tool_result")
-        if tool_result:
-            # Create a detailed prompt for the LLM to analyze tool results and suggest plan modifications
-            prompt = f"""
-            You are a Windows Operating System manager. Your role is to analyze tool results and determine if the current plan needs modification.
-
-            If tool call returned error, change plan to use other tools instead.
-            
-            ## CONTEXT
-            User Query: {state.get('user_query', '')}
-            
-            ## CURRENT PLAN
-            {state['plan']}
-            
-            ## TOOL RESULT
-            Tool Used: {state.get('current_task', {}).get('tool', 'Unknown Tool')}
-            Result Content: {tool_result}
-            
-            ## ANALYSIS INSTRUCTIONS
-            1. Analyze whether the tool result fully addresses the current task's objective
-            2. Determine if any new information from the tool result requires modifying the plan
-            3. Consider if additional steps are needed to solve the user's query
-            4. Decide if any existing tasks should be removed or modified based on the new information
-            
-            ## DECISION TYPES
-            - ADD: Create a new task to address gaps or new insights
-            - REMOVE: Eliminate unnecessary tasks
-            - MODIFY: Update existing tasks with new parameters or descriptions
-            
-            ## JSON OUTPUT FORMAT (CRITICAL)
-            Please provide your decision in the exact JSON format below, with no additional text before or after:
-            
-            {{"should_modify_plan": true/false, "plan_modifications": [
-                {{"type": "add"/"remove"/"modify", "task_id": "optional_task_id", 
-                "new_task": {{"description": "detailed_task_description", "tool": "appropriate_tool_name", 
-                "params": {{"key1": "value1", "key2": "value2"}}}}, "reason": "specific_justification"}},
-                ... additional modifications ...
-            ]}}
-            
-            For ADD operations, include a comprehensive new_task with all required fields
-            For REMOVE operations, only include task_id
-            For MODIFY operations, include task_id and optionally update fields in new_task
-            
-            IMPORTANT: Ensure your response is valid JSON that can be parsed directly.
-            """
-            
-            try:
-                # Use LLM to generate plan modifications
-                llm_response = self.llm.generate(prompt)
-                
-                # Parse the LLM response
-                import json
-                observation = json.loads(llm_response)
-                
-                # Apply plan modifications suggested by LLM
-                if observation.get("should_modify_plan", False):
-                    modifications = observation.get("plan_modifications", [])
-                    plan_tasks = state["plan"].get("tasks", [])
-                    
-                    for modification in modifications:
-                        mod_type = modification.get("type")
-                        task_id = modification.get("task_id")
-                        reason = modification.get("reason")
-                        
-                        if mod_type == "add" and "new_task" in modification:
-                            # Add new task
-                            new_task = modification["new_task"]
-                            # Ensure the new task has all required fields
-                            if "task_id" not in new_task:
-                                # Generate a new task ID
-                                import uuid
-                                new_task["task_id"] = f"task_{uuid.uuid4().hex[:8]}"
-                            if "status" not in new_task:
-                                new_task["status"] = "pending"
-                            if "description" not in new_task:
-                                new_task["description"] = "New task added by LLM observation"
-                            if "tool" not in new_task:
-                                new_task["tool"] = "knowledge_retrieval"  # Default tool
-                            if "params" not in new_task:
-                                new_task["params"] = {}
-                            
-                            # Ensure knowledge_retrieval tasks have a query parameter
-                            if new_task["tool"] == "knowledge_retrieval" and "query" not in new_task["params"]:
-                                new_task["params"]["query"] = state.get("user_query", "")
-                            
-                            plan_tasks.append(new_task)
-                            print(f"Added new task: {new_task.get('description', 'N/A')} - Reason: {reason}")
-                            
-                        elif mod_type == "remove" and task_id:
-                            # Remove task
-                            plan_tasks = [task for task in plan_tasks if task.get("task_id") != task_id]
-                            print(f"Removed task {task_id} - Reason: {reason}")
-                            
-                        elif mod_type == "modify" and task_id:
-                            # Modify existing task
-                            for task in plan_tasks:
-                                if task.get("task_id") == task_id:
-                                    # Reset task status to pending so it can be re-executed
-                                    task["status"] = "pending"
-                                    # Update task with new information from modification if available
-                                    if "new_task" in modification:
-                                        new_task_data = modification["new_task"]
-                                        task.update(new_task_data)
-                                    # Ensure knowledge_retrieval tasks have a query parameter
-                                    if task.get("tool") == "knowledge_retrieval" and "params" in task:
-                                        if "query" not in task["params"]:
-                                            task["params"]["query"] = state.get("user_query", "")
-                                    print(f"Modified task {task_id} - Reason: {reason}")
-                                    break
-                    
-                    # Update the plan with modified tasks
-                    state["plan"]["tasks"] = plan_tasks
-            except Exception as e:
-                print(f"Error using LLM for plan modification: {str(e)}")
-        
         # Fall back to existing observation-based modifications if no tool result or LLM fails
-        elif state.get("observation", {}).get("should_modify_plan", False):
+        if state.get("observation", {}).get("should_modify_plan", False):
             modifications = state.get("observation", {}).get("plan_modifications", [])
             plan_tasks = state["plan"].get("tasks", [])
             
@@ -665,24 +536,24 @@ class ReactAgent:
                         new_task["params"]["query"] = state.get("user_query", "")
                     
                     plan_tasks.append(new_task)
-                    print(f"Added new task: {new_task.get('description', 'N/A')} - Reason: {reason}")
+                    self.console.print(f"[bold yellow]Added new task: {new_task.get('description', 'N/A')} - Reason: {reason}[/bold yellow]")
                     
                 elif mod_type == "remove" and task_id:
                     # Remove task
                     plan_tasks = [task for task in plan_tasks if task.get("task_id") != task_id]
-                    print(f"Removed task {task_id} - Reason: {reason}")
+                    self.console.print(f"[bold yellow]Removed task {task_id} - Reason: {reason}[/bold yellow]")
                     
                 elif mod_type == "modify" and task_id:
                     # Modify existing task
                     for task in plan_tasks:
                         if task.get("task_id") == task_id:
-                            # Reset task status to pending so it can be re-executed
-                            task["status"] = "pending"
+                            # Don't reset task status to pending to avoid re-execution
+                            # Only update task properties without changing status
                             # Ensure knowledge_retrieval tasks have a query parameter
                             if task.get("tool") == "knowledge_retrieval" and "params" in task:
                                 if "query" not in task["params"]:
                                     task["params"]["query"] = state.get("user_query", "")
-                            print(f"Modified task {task_id} - Reason: {reason}")
+                            self.console.print(f"[bold yellow]Modified task {task_id} - Reason: {reason}[/bold yellow]")
                             break
             
             # Update the plan with modified tasks
@@ -691,6 +562,24 @@ class ReactAgent:
         # Save updated plan to memory
         self.memory.save_plan(state["plan_id"], state["user_query"], state["plan"])
         
+        # Show current plan as a table.
+        self.console.print("\n[bold yellow]Current Troubleshooting Plan:[/bold yellow]")
+        table = Table(show_header=True, header_style="bold magenta", expand=False)
+        table.add_column("Task ID", style="dim")
+        table.add_column("Description")
+        table.add_column("Tool")
+        table.add_column("Params", style="dim")
+        table.add_column("Status")
+        for task in state["plan"]["tasks"]:
+            table.add_row(
+                task["task_id"],
+                task.get("description", "N/A"),
+                task.get("tool", "N/A"),
+                str(task.get("params", {})),
+                task.get("status", "N/A")
+            )
+        self.console.print(table)
+
         return {
             "user_query": state["user_query"],
             "plan": state["plan"],
@@ -730,9 +619,26 @@ class ReactAgent:
     def _should_continue(self, state: AgentState) -> str:
         """Determine if the agent should continue or complete the troubleshooting process."""
         # Check if all tasks are completed
-        tasks = state["plan"].get("tasks", [])
-        all_completed = all(task.get("status") == "completed" for task in tasks)
-        return "complete" if all_completed else "continue"
+        #tasks = state["plan"].get("tasks", [])
+        #all_completed = all(task.get("status") == "completed" for task in tasks)
+        continue_prompt = ChatPromptTemplate.from_template("""
+        You are an AI assistant helping to troubleshoot a user query.
+        The current plan which was modified is: {plan}
+        The user query is: {user_query}
+        The previous tool result is: {tool_result}
+        The observation is: {observation}
+        Should the agent continue troubleshooting? (ONLY REPLY yes/no)!
+        """)
+        chain = continue_prompt | self.llm | StrOutputParser()
+        continue_decision = chain.invoke({
+            "plan": state["plan"],
+            "user_query": state["user_query"],
+            "tool_result": state.get("tool_result"),
+            "observation": state.get("observation")
+        })
+        self.console.print("Continue Decision:", continue_decision)
+
+        return "complete" if continue_decision.lower() == "no" else "continue"
     
     def _report_result(self, state: AgentState) -> Dict:
         """Report the final troubleshooting result."""
@@ -800,3 +706,25 @@ class ReactAgent:
             "plan": result["plan"],
             "final_result": result["tool_result"]
         }
+
+    def print_mermaid_workflow(self):
+        """
+        Utility: print Mermaid diagram to visualize the graph edges.
+        """
+        try:
+            mermaid = self.graph.get_graph().draw_mermaid_png(
+                output_file_path="agent_workflow.png",
+                max_retries=5,
+                retry_delay=2,
+            )
+        except Exception as e:
+            print(f"Error generating mermaid PNG: {e}")
+            mermaid = self.graph.get_graph().draw_mermaid()
+            self.console.print(
+                Panel.fit(
+                    Syntax(mermaid, "mermaid", theme="monokai", line_numbers=False),
+                    title="Agent Workflow (Mermaid)",
+                    border_style="cyan",
+                )
+            )
+            print(self.graph.get_graph().draw_ascii())
