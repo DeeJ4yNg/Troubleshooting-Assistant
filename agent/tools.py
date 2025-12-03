@@ -306,6 +306,14 @@ class KnowledgeRetrievalTool:
             logger.error(f"Unexpected error during knowledge retrieval: {e}")
             return []
 
+class ReportResultTool:
+    name = "report_result"
+    description = "Report the final result of the troubleshooting process."
+    
+    def __call__(self, summary: str, result: str) -> str:
+        """Report the final result."""
+        return f"Report generated successfully.\nSummary: {summary}\nResult: {result}"
+
 # Create tool instances
 memory = SQLiteMemory()
 
@@ -315,6 +323,7 @@ write_ps1_file_tool = WritePS1FileTool()
 run_ps1_test_tool = RunPS1TestTool()
 online_search_tool = OnlineSearchTool()
 knowledge_retrieval_tool = KnowledgeRetrievalTool()  # 不再需要传入memory参数
+report_result_tool = ReportResultTool()
 
 # Tool registry for easy access
 tools = {
@@ -323,5 +332,6 @@ tools = {
     "write_ps1_file": write_ps1_file_tool,
     "run_ps1_test": run_ps1_test_tool,
     "online_search": online_search_tool,
-    "knowledge_retrieval": knowledge_retrieval_tool
+    "knowledge_retrieval": knowledge_retrieval_tool,
+    "report_result": report_result_tool
 }

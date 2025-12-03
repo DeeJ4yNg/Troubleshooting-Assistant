@@ -1,7 +1,8 @@
 from typing import Dict, Any, List, Optional, Sequence, Annotated
 from langgraph.graph import StateGraph, END
 from langchain_core.prompts import ChatPromptTemplate
-from langchain_core.output_parsers import StrOutputParser
+from langchain_core.output_parsers import StrOutputParser, JsonOutputParser
+from pydantic.v1 import BaseModel, Field
 from langchain_openai import ChatOpenAI
 from agent.memory import SQLiteMemory
 from agent.tools import tools
@@ -33,13 +34,14 @@ class AgentState(TypedDict):
     pending_tool_execution: Annotated[Optional[Dict], LastValue(Optional[Dict])]
 
 class ReactAgent:
-    def __init__(self, memory: SQLiteMemory):
+    def __init__(self, memory: SQLiteMemory, ui=None):
         self.memory = memory
         # Initialize OpenAI LLM with API key from environment variables
         openai_api_key = os.getenv("OPENAI_API_KEY")
         openai_model = os.getenv("OPENAI_MODEL", "gpt-3.5-turbo")
         api_base = os.getenv("OPENAI_API_BASE")
         self.console = Console()
+        self.ui = ui
         
         if not openai_api_key:
             raise ValueError("OPENAI_API_KEY environment variable is not set")
@@ -110,6 +112,21 @@ class ReactAgent:
     
     def _create_plan(self, state: AgentState) -> Dict:
         """Create a troubleshooting plan based on the user query."""
+        
+        # Define Pydantic models for structured output
+        class Task(BaseModel):
+            task_id: str = Field(description="Unique identifier for the task, e.g., 'task_1'")
+            description: str = Field(description="Clear description of what the task does")
+            tool: str = Field(description="The appropriate tool to use")
+            params: Dict[str, Any] = Field(description="Proper parameters for the tool")
+            status: str = Field(description="Initial status of the task", default="pending")
+
+        class Plan(BaseModel):
+            tasks: List[Task] = Field(description="List of troubleshooting tasks")
+
+        # Set up the parser
+        parser = JsonOutputParser(pydantic_object=Plan)
+
         prompt = ChatPromptTemplate.from_template("""
         You are a Windows OS troubleshooting expert. Create a detailed step-by-step plan to troubleshoot the following issue:
         
@@ -124,48 +141,40 @@ class ReactAgent:
         - knowledge_retrieval: Retrieve knowledge from database (Example params: {{"query": "Windows Settings app repair methods", "limit": 5}})
         
         Create a comprehensive plan with at least 3-5 tasks that thoroughly address the issue.
-        Each task should have:
-        1. A unique task_id (e.g., "task_1", "task_2")
-        2. A clear description of what the task does
-        3. The appropriate tool to use
-        4. Proper parameters for the tool
         
-        Format the plan as a JSON object with the following structure:
-        {{
-            "tasks": [
-                {{
-                    "task_id": "task_1",
-                    "description": "Description of the task",
-                    "tool": "online_search",
-                    "params": {{
-                        "query": "{user_query}"
-                    }}
-                }}
-            ]
-        }}
+        {format_instructions}
         
-        Make sure to escape all curly braces in the JSON structure. The user's query is: {user_query}
+        The user's query is: {user_query}
         """)
         
         if state.get("plan"):
             return state
 
-        chain = prompt | self.llm | StrOutputParser()
-        plan_str = chain.invoke({"user_query": state["user_query"]})
-        print(f"Generated plan: {plan_str}")  # Debug print
+        chain = prompt | self.llm | parser
         
-        # Parse the plan (simplified for now)
-        import json
         try:
-            plan = json.loads(plan_str)
-        except json.JSONDecodeError:
-            # Fallback plan if LLM doesn't return valid JSON
+            plan = chain.invoke({
+                "user_query": state["user_query"],
+                "format_instructions": parser.get_format_instructions()
+            })
+            print(f"Generated plan: {plan}")  # Debug print
+            
+            # Ensure all tasks have a status (double check)
+            if "tasks" in plan:
+                for task in plan["tasks"]:
+                    if "status" not in task:
+                        task["status"] = "pending"
+                        
+        except Exception as e:
+            print(f"Error generating plan: {e}")
+            # Fallback plan
             plan = {
                 "tasks": [
                     {
                         "task_id": "task_1",
                         "description": "Search for information about the issue",
                         "tool": "online_search",
+                        "status": "pending",
                         "params": {"query": state["user_query"]}
                     }
                 ]
@@ -319,6 +328,12 @@ class ReactAgent:
             
         tool_name = pending_execution["tool_name"]
         params = pending_execution["params"]
+        current_task = pending_execution.get("task")
+        
+        # Display tool execution if UI is available
+        if self.ui and current_task:
+            self.ui.display_tool_execution(current_task)
+        
         confirm = Prompt.ask(f"[bold yellow]Are you sure you want to execute tool: {tool_name} with params: {params}? (yes/no)[/bold yellow]")
         if confirm.lower() != "yes":
             return state
@@ -335,6 +350,15 @@ class ReactAgent:
                 tool_result = f"Error executing tool '{tool_name}': {str(e)}"
         
         # Clear pending execution and return result
+        
+        # Mark task as completed immediately after execution
+        if pending_execution.get("task"):
+            task_id = pending_execution["task"]["task_id"]
+            for task in state["plan"].get("tasks", []):
+                if task["task_id"] == task_id:
+                    task["status"] = "completed"
+                    break
+                    
         return {
             "user_query": state["user_query"],
             "plan": state["plan"],
@@ -361,7 +385,7 @@ class ReactAgent:
         # Use LLM to analyze the result and suggest plan modifications
         try:
             analysis_prompt = ChatPromptTemplate.from_template("""
-            You are a Windows OS troubleshooting expert. Analyze the following tool execution result and suggest 
+            You are a Windows OS troubleshooting expert. Based on the troubleshooting plan and the conversation history, analyze the following tool execution result and suggest 
             any necessary modifications to the troubleshooting plan.
             
             IMPORTANT: Avoid creating duplicate tasks that were already executed in the conversation history. 
@@ -369,11 +393,15 @@ class ReactAgent:
             Focus on making progress toward resolving the issue rather than repeating previous steps.
             
             Original user query: {user_query}
+
+            Troubleshooting plan:
+            {plan}
             
             Conversation history:
             {conversation_history}
             
             Executed task: {task_description}
+
             Tool result: {tool_result}
             
             Current plan tasks:
@@ -396,10 +424,20 @@ class ReactAgent:
             - online_search: Search the internet (Example params: {{"query": "Windows 11 Settings app not opening fix", "max_results": 3}})
             - knowledge_retrieval: Retrieve knowledge from database (Example params: {{"query": "Windows Settings app repair methods", "limit": 5}})
             
-            Respond with a JSON object containing:
+            Keep modifications minimal and focused. If no changes are needed, set should_modify_plan to false.
+            Always prioritize making forward progress and avoiding repetition.
+
+            REMEMBER: 
+            1.NO DUPLICATE TASKS IN THE PLAN!
+            2.All tasks in the plan should be executable by the available tools.
+            3.If a task is not executable, remove it from the plan!
+            4.Do not remove the current task from the plan!
+            5.Do not remove the completed tasks!
+            6.All plan modifications must be added to "modifications" list!!!
+            7.Respond with a JSON object containing:
             {{
                 "success": true/false,
-                "analysis": "Brief analysis of the result",
+                "analysis": "Brief analysis of the result, do not contain any plan modifications.",
                 "should_modify_plan": true/false,
                 "modifications": [
                     {{
@@ -410,11 +448,6 @@ class ReactAgent:
                     }}
                 ]
             }}
-            
-            Keep modifications minimal and focused. If no changes are needed, set should_modify_plan to false.
-            Always prioritize making forward progress and avoiding repetition.
-
-            REMEMBER: NO DUPLICATE TASKS IN THE PLAN!
             """)
             
             plan_tasks_info = "\n".join([
@@ -426,7 +459,7 @@ class ReactAgent:
             
             # Format conversation history for the prompt
             conversation_history_text = "\n".join([
-                f"{msg['role'].upper()}: {msg['content']}" 
+                f"Task {msg.get('task_id', 'N/A')} ({msg.get('tool', 'N/A')}): {msg['content']}" 
                 for msg in state.get("conversation_history", [])[-10:]  # Include last 10 messages to keep context manageable
             ])
             
@@ -436,19 +469,41 @@ class ReactAgent:
                 "conversation_history": conversation_history_text,
                 "task_description": task_description,
                 "tool_result": str(tool_result),
-                "plan_tasks": plan_tasks_info
+                "plan_tasks": plan_tasks_info,
+                "plan": state.get("plan", {})
                 })
             
             # Try to parse the LLM response as JSON
             import json
+            import re
             try:
-                analysis_json = json.loads(analysis_result)
+                # Step 1: Extract JSON from markdown code blocks if present
+                json_match = re.search(r'```json\s*([\s\S]*?)\s*```', analysis_result)
+                if json_match:
+                    plan_str = json_match.group(1)
+                else:
+                    # Step 2: Look for JSON object directly if no code blocks
+                    json_match = re.search(r'\{[\s\S]*\}', analysis_result)
+                    if json_match:
+                        plan_str = json_match.group(0)
+                    else:
+                        plan_str = analysis_result
+                
+                # Step 3: Clean up the JSON string
+                plan_str = plan_str.strip()  # Remove leading/trailing whitespace
+                plan_str = re.sub(r'^\s*#.*$', '', plan_str, flags=re.MULTILINE)  # Remove comments
+                plan_str = re.sub(r',\s*([}\]])', r'\1', plan_str)  # Remove trailing commas
+                
+                # Step 4: Try to parse the cleaned JSON
+                analysis_json = json.loads(plan_str)
                 self.console.print(analysis_json)
                 observation["success"] = analysis_json.get("success", False)
                 observation["llm_analysis"] = analysis_json.get("analysis", "")
                 observation["should_modify_plan"] = analysis_json.get("should_modify_plan", False)
                 observation["plan_modifications"] = analysis_json.get("modifications", [])
-            except json.JSONDecodeError:
+            except json.JSONDecodeError as e:
+                self.console.print(f"JSON parsing failed for analysis result: {e}")
+                self.console.print(f"Attempted to parse: {plan_str}")
                 # If JSON parsing fails, treat as plain text analysis
                 observation["llm_analysis"] = analysis_result
                 observation["should_modify_plan"] = False
@@ -480,9 +535,19 @@ class ReactAgent:
         # Add the observation to the conversation history
         conversation_history = state.get("conversation_history", []).copy()
         conversation_history.append({
-            "role": "system",
-            "content": f"Tool_Result: {tool_result}. modifications: {observation.get('plan_modifications', '')}. LLM Analysis: {observation.get('llm_analysis', '')}"
+            "task_id": current_task.get("task_id", "unknown"),
+            "description": current_task.get("description", ""),
+            "tool": current_task.get("tool", ""),
+            "params": current_task.get("params", {}),
+            "content": f"Tool_Result: {tool_result}. Plan Modifications: {observation.get('plan_modifications', '')}. LLM Analysis: {observation.get('llm_analysis', '')}"
         })
+        
+        # Display observation if UI is available
+        if self.ui:
+            #self.ui.display_observation(observation)
+            self.ui.display_plan_modifications(observation)
+
+        self._print_agent_context(state)
         
         return {
             "user_query": state["user_query"],
@@ -497,15 +562,10 @@ class ReactAgent:
 
     def _modify_plan(self, state: AgentState) -> Dict:
         """Modify the plan based on the tool result and LLM analysis."""
-        # Mark current task as completed
-        if state.get("current_task"):
-            for task in state["plan"].get("tasks", []):
-                if task["task_id"] == state["current_task"]["task_id"]:
-                    task["status"] = "completed"
-                    break
+        # Note: Task status is already marked as completed in _execute_confirmed_tool
         
         # Fall back to existing observation-based modifications if no tool result or LLM fails
-        if state.get("observation", {}).get("should_modify_plan", False):
+        if state.get("observation", {}).get("should_modify_plan", False) or state.get("observation", {}).get("should_modify_plan", {}):
             modifications = state.get("observation", {}).get("plan_modifications", [])
             plan_tasks = state["plan"].get("tasks", [])
             
@@ -532,8 +592,12 @@ class ReactAgent:
                         new_task["params"] = {}
                     
                     # Ensure knowledge_retrieval tasks have a query parameter
-                    if new_task["tool"] == "knowledge_retrieval" and "query" not in new_task["params"]:
-                        new_task["params"]["query"] = state.get("user_query", "")
+                    if new_task["tool"] == "knowledge_retrieval":
+                        # Make sure params is a dictionary
+                        if not isinstance(new_task["params"], dict):
+                            new_task["params"] = {}
+                        if "query" not in new_task["params"]:
+                            new_task["params"]["query"] = state.get("user_query", "")
                     
                     plan_tasks.append(new_task)
                     self.console.print(f"[bold yellow]Added new task: {new_task.get('description', 'N/A')} - Reason: {reason}[/bold yellow]")
@@ -550,9 +614,27 @@ class ReactAgent:
                             # Don't reset task status to pending to avoid re-execution
                             # Only update task properties without changing status
                             # Ensure knowledge_retrieval tasks have a query parameter
-                            if task.get("tool") == "knowledge_retrieval" and "params" in task:
+                            if task.get("tool") == "knowledge_retrieval":
+                                if "params" not in task:
+                                    task["params"] = {}
+                                # Make sure params is a dictionary
+                                elif not isinstance(task["params"], dict):
+                                    task["params"] = {}
                                 if "query" not in task["params"]:
                                     task["params"]["query"] = state.get("user_query", "")
+
+                            # 如果有 new_task，则修改当前 task_id 对应的 description、tool、params，并将 status 设为 pending
+                            if "new_task" in modification:
+                                new_task_data = modification["new_task"]
+                                
+                                if "description" in new_task_data:
+                                    task["description"] = new_task_data["description"]
+                                if "tool" in new_task_data:
+                                    task["tool"] = new_task_data["tool"]
+                                if "params" in new_task_data:
+                                    task["params"] = new_task_data["params"]
+                                task["status"] = "pending"  # 重置状态为 pending
+                            
                             self.console.print(f"[bold yellow]Modified task {task_id} - Reason: {reason}[/bold yellow]")
                             break
             
@@ -621,12 +703,16 @@ class ReactAgent:
         # Check if all tasks are completed
         #tasks = state["plan"].get("tasks", [])
         #all_completed = all(task.get("status") == "completed" for task in tasks)
+        print("Checking completion status with current plan...")
+        print(state["plan"])
         continue_prompt = ChatPromptTemplate.from_template("""
         You are an AI assistant helping to troubleshoot a user query.
         The current plan which was modified is: {plan}
         The user query is: {user_query}
         The previous tool result is: {tool_result}
         The observation is: {observation}
+        DO NOT reply no if you see any task status is pending!
+        If all task status is completed, check if the tool result is valid without any error, if not, REPLY yes to continue troubleshooting!
         Should the agent continue troubleshooting? (ONLY REPLY yes/no)!
         """)
         chain = continue_prompt | self.llm | StrOutputParser()
@@ -682,8 +768,68 @@ class ReactAgent:
             "plan": plan_state["plan"]
         }
     
+    def _print_agent_context(self, state: AgentState, step: str = "") -> None:
+        """Print the current agent context for debugging and testing purposes."""
+        self.console.print("\n[bold green]=== Agent Context Information ===[/bold green]")
+        self.console.print(f"[bold]Step:[/bold] {step}")
+        self.console.print(f"[bold]Plan ID:[/bold] {state.get('plan_id')}")
+        self.console.print(f"[bold]User Query:[/bold] {state.get('user_query')}")
+        
+        if state.get('current_task'):
+            task = state['current_task']
+            self.console.print(f"[bold]Current Task:[/bold] {task.get('task_id')} - {task.get('description')}")
+            self.console.print(f"[bold]Task Tool:[/bold] {task.get('tool')}")
+            self.console.print(f"[bold]Task Params:[/bold] {task.get('params')}")
+        
+        if state.get('tool_result'):
+            self.console.print(f"[bold]Last Tool Result:[/bold] {state.get('tool_result')}")
+        
+        if state.get('observation'):
+            obs = state.get('observation')
+            if isinstance(obs, dict):
+                self.console.print("[bold]Observation:[/bold]")
+                for k, v in obs.items():
+                    self.console.print(f"  [cyan]{k}:[/cyan] {v}")
+            else:
+                self.console.print(f"[bold]Observation:[/bold] {obs}")
+        
+        if state.get('pending_tool_execution'):
+            pending_exec = state['pending_tool_execution']
+            self.console.print(f"[bold]Pending Tool Execution:[/bold] {pending_exec.get('tool_name')} with params {pending_exec.get('params')}")
+        
+        # Print plan status
+        if state.get('plan') and state['plan'].get('tasks'):
+            self.console.print("\n[bold]Plan Status:[/bold]")
+            for task in state['plan']['tasks']:
+                status = task.get('status', 'pending')
+                self.console.print(f"  - {task.get('task_id')}: {status} - {task.get('description')[:50]}...")
+
+        if state.get('conversation_history'):
+            # 格式化显示对话历史
+            conversation_history = state.get("conversation_history", [])
+            if conversation_history:
+                self.console.print("\n[bold]Conversation history:[/bold]")
+                table = Table(show_header=True, header_style="bold magenta")
+                table.add_column("Task ID", style="dim", width=12)
+                table.add_column("Description")
+                table.add_column("Tool")
+                table.add_column("Params")
+                table.add_column("Content")
+                for msg in conversation_history:
+                    task_id = msg.get("task_id", "unknown")
+                    description = msg.get("description", "")
+                    tool = msg.get("tool", "")
+                    params = str(msg.get("params", ""))
+                    content = msg.get("content", "")
+                    table.add_row(task_id, description, tool, params, content)
+                self.console.print(table)
+            else:
+                self.console.print("\n[bold]Conversation history:[/bold] (empty)")
+        
+        self.console.print("[bold green]=================================[/bold green]\n")
+    
     def execute_plan(self, user_query: str, plan: Dict) -> Dict[str, Any]:
-        """Execute a pre-generated plan."""
+        """Execute a pre-generated plan with context tracking."""
         import uuid
         plan_id = str(uuid.uuid4())
         
@@ -700,7 +846,15 @@ class ReactAgent:
             "conversation_history": [],
             "plan_id": plan_id
         }
+        
+        # Print initial context
+        self._print_agent_context(initial_state, "Initial State")
+        
         result = self.graph.invoke(initial_state, config={"recursion_limit": 200})
+        
+        # Print final context
+        self._print_agent_context(result, "Final State")
+        
         return {
             "plan_id": result["plan_id"],
             "plan": result["plan"],

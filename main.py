@@ -14,7 +14,7 @@ class WindowsTroubleshootingUI:
     def __init__(self):
         self.console = Console()
         self.memory = SQLiteMemory()
-        self.agent = ReactAgent(self.memory)
+        self.agent = ReactAgent(self.memory, self)  # 传入UI实例
         self.conversation_id = "default"
     
     def display_welcome(self):
@@ -247,26 +247,13 @@ class WindowsTroubleshootingUI:
                 # Invoke the graph to get the next state
                 current_state = self.agent.graph.invoke(current_state, config=config)
                 
-                # Check if there's a pending tool execution
+                # Check if there's a pending tool execution that needs user confirmation
                 if current_state.get("pending_tool_execution"):
-                    # Handle tool execution confirmation
-                    pending_execution = current_state["pending_tool_execution"]
-                    task = pending_execution.get("task", {})
-                    tool_name = task.get("tool", "Unknown Tool")
-                    params = task.get("params", {})
-                    
-                    self.display_tool_execution(task, pending_execution.get("result", ""))
-                    
-                    if not self.get_tool_execution_confirmation(tool_name, params):
-                        self.console.print("\n[bold red]Tool execution denied. Stopping workflow.[/bold red]")
-                        break
-                    
-                    # Execute the confirmed tool
-                    result = self.agent._execute_confirmed_tool(current_state)
-                    # Update current state with the result
-                    current_state.update(result)
+                    # User confirmation is now handled inside the agent's _execute_confirmed_tool function
+                    # We don't need to do anything here except continue the loop
+                    continue
                 
-                # Check if we've reached the final result
+                # Check if the troubleshooting process is complete
                 if current_state.get("tool_result") and "Troubleshooting process completed" in str(current_state.get("tool_result", "")):
                     break
             
