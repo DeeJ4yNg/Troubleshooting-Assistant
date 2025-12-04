@@ -1,0 +1,574 @@
+import os
+import re
+import subprocess
+import numpy as np
+import logging
+try:
+    import winreg
+except ImportError:
+    winreg = None
+
+try:
+    import docx
+    DOCX_AVAILABLE = True
+except ImportError:
+    DOCX_AVAILABLE = False
+
+from typing import List, Dict, Any, Optional
+from ddgs import DDGS
+from agent.memory import SQLiteMemory
+from agent.knowledge_manager import KnowledgeManager
+
+# 配置日志记录器
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+def generate_embedding(text: str, model_type: Optional[str] = None) -> List[float]:
+    """生成文本的嵌入向量
+    
+    Args:
+        text: 输入文本
+        model_type: 模型类型 ("openai" 或 None)
+        
+    Returns:
+        嵌入向量列表
+    """
+    try:
+        if model_type == "openai":
+            import openai
+            response = openai.Embedding.create(
+                input=text,
+                model="text-embedding-ada-002"
+            )
+            return response['data'][0]['embedding']
+        
+        # 如果没有嵌入模型，返回默认向量
+        # 注意：在实际应用中，应该使用适当的嵌入模型
+        return [0.0] * 1536
+    except Exception as e:
+        logger.error(f"Failed to generate embedding: {e}")
+        return [0.0] * 1536
+
+class ListLogFilesTool:
+    name = "list_log_files"
+    description = "List all log files in a specified directory path. Example: {{\"path\": \"C:/Windows/Logs\"}} to list all log files in Windows logs directory."
+    
+    def __call__(self, path: str) -> List[str]:
+        """List all log files in the specified directory."""
+        try:
+            if not os.path.exists(path):
+                return [f"Error: Directory '{path}' does not exist"]
+            
+            log_files = []
+            for root, _, files in os.walk(path):
+                for file in files:
+                    if file.endswith(('.log', '.txt', '.evt', '.evtx')):
+                        log_files.append(os.path.join(root, file))
+            
+            if not log_files:
+                return [f"No log files found in '{path}'"]
+            
+            return log_files
+        except Exception as e:
+            return [f"Error: {str(e)}"]
+
+class ReadErrorLogsTool:
+    name = "read_error_logs"
+    description = "Read and extract error messages from a log file. Example: {{\"file_path\": \"C:/Windows/Logs/System.evtx\", \"max_lines\": 100}} to read errors from system event log."
+    
+    def __call__(self, file_path: str, max_lines: int = 100) -> List[str]:
+        """Read error messages from the specified log file."""
+        try:
+            if not os.path.exists(file_path):
+                return [f"Error: File '{file_path}' does not exist"]
+            
+            errors = []
+            error_patterns = [
+                r'ERROR', r'Error', r'error',
+                r'FAILED', r'Failed', r'failed',
+                r'EXCEPTION', r'Exception', r'exception',
+                r'CRITICAL', r'Critical', r'critical',
+                r'WARNING', r'Warning', r'warning'
+            ]
+            
+            with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+                lines = f.readlines()
+                
+            for line in lines[-max_lines:]:
+                if any(re.search(pattern, line) for pattern in error_patterns):
+                    errors.append(line.strip())
+            
+            if not errors:
+                return [f"No error messages found in the last {max_lines} lines of '{file_path}'"]
+            
+            return errors
+        except Exception as e:
+            return [f"Error: {str(e)}"]
+
+class WritePS1FileTool:
+    name = "write_ps1_file"
+    description = "Create a PowerShell script file with the given content. Example: {{\"file_path\": \"C:/temp/fix_settings.ps1\", \"content\": \"Get-AppxPackage Microsoft.Windows.SettingsApp | Reset-AppxPackage\"}} to create a script that resets Settings app."
+    
+    def __call__(self, file_path: str, content: str) -> str:
+        """Create a PowerShell script file."""
+        try:
+            with open(file_path, 'w', encoding='utf-8') as f:
+                f.write(content)
+            return f"Successfully created PowerShell script at '{file_path}'"
+        except Exception as e:
+            return f"Error: {str(e)}"
+
+class RunPS1TestTool:
+    name = "run_ps1_test"
+    description = "Run a PowerShell script and return the output. Example: {{\"file_path\": \"C:/temp/fix_settings.ps1\"}} to execute the previously created PowerShell script."
+    
+    def __call__(self, file_path: str) -> str:
+        """Run a PowerShell script and return the output."""
+        try:
+            if not os.path.exists(file_path):
+                return f"Error: File '{file_path}' does not exist"
+            
+            result = subprocess.run(
+                ["powershell.exe", "-ExecutionPolicy", "Bypass", "-File", file_path],
+                capture_output=True,
+                text=True,
+                timeout=30
+            )
+            
+            output = f"Exit Code: {result.returncode}\n"
+            if result.stdout:
+                output += f"STDOUT:\n{result.stdout}\n"
+            if result.stderr:
+                output += f"STDERR:\n{result.stderr}\n"
+            
+            return output
+        except subprocess.TimeoutExpired:
+            return f"Error: Script execution timed out after 30 seconds"
+        except Exception as e:
+            return f"Error: {str(e)}"
+
+class OnlineSearchTool:
+    name = "online_search"
+    description = "Search the internet using DuckDuckGo for the given query. Example: {{\"query\": \"Windows 11 Settings app not opening fix\", \"max_results\": 3}} to search for troubleshooting solutions."
+    
+    def __call__(self, query: str, max_results: int = 5) -> List[Dict[str, str]]:
+        """Search the internet using DuckDuckGo."""
+        try:
+            with DDGS() as ddgs:
+                results = list(ddgs.text(query, max_results=max_results))
+            
+            formatted_results = []
+            for result in results:
+                formatted_results.append({
+                    "title": result.get("title", ""),
+                    "url": result.get("href", ""),
+                    "content": result.get("body", "")
+                })
+            
+            return formatted_results
+        except Exception as e:
+            return [{"error": str(e)}]
+
+class KnowledgeRetrievalTool:
+    name = "knowledge_retrieval"
+    description = "Retrieve knowledge from the knowledge base using hybrid search (BM25 + ANN). Example: {{'query': 'Windows Settings app repair methods', 'limit': 5}} to retrieve relevant information."
+    
+    def __init__(self):
+        """初始化知识库检索工具。"""
+        try:
+            # 使用KnowledgeManager代替SQLiteMemory
+            self.knowledge_manager = KnowledgeManager()
+            # 尝试导入嵌入模型
+            self.embedding_model = self._init_embedding_model()
+            logger.info("KnowledgeRetrievalTool initialized successfully")
+        except Exception as e:
+            logger.error(f"Failed to initialize KnowledgeRetrievalTool: {e}")
+            # 创建一个简单的备份实现，只支持关键词搜索
+            self.knowledge_manager = None
+    
+    def _init_embedding_model(self) -> Optional[Any]:
+        """初始化嵌入模型"""
+        try:
+            # 尝试导入OpenAI模型（如果可用）
+            try:
+                import openai
+                # 检查API密钥
+                if os.environ.get("OPENAI_API_KEY"):
+                    return "openai"
+            except ImportError:
+                pass
+            return None
+        except Exception:
+            return None
+    
+    def __call__(self, query: str, limit: int = 5, alpha: float = 0.5) -> List[Dict[str, Any]]:
+        """使用混合搜索检索知识"""
+        # 验证输入参数
+        if not query or not isinstance(query, str):
+            logger.error("Invalid query parameter")
+            return []
+        
+        limit = max(1, min(100, int(limit)))
+        alpha = max(0.0, min(1.0, float(alpha)))
+        
+        try:
+            if self.knowledge_manager is None:
+                logger.error("Knowledge manager is not initialized")
+                return []
+            
+            try:
+                # 生成查询嵌入向量
+                query_embedding = generate_embedding(query, self.embedding_model)
+                
+                # 执行混合搜索
+                results = self.knowledge_manager.hybrid_search(
+                    query=query,
+                    query_embedding=query_embedding,
+                    limit=limit,
+                    alpha=alpha
+                )
+                
+                formatted_results = []
+                for result in results:
+                    formatted_results.append({
+                        "topic": result.get("topic", ""),
+                        "content": result.get("content", ""),
+                        "source": result.get("source", ""),
+                        "score": result.get("score", 0)
+                    })
+                
+                logger.info("Hybrid search completed successfully")
+                return formatted_results
+            except Exception as hybrid_error:
+                logger.warning(f"Hybrid search failed, falling back to BM25: {hybrid_error}")
+                
+                # 如果混合搜索失败，回退到BM25搜索
+                try:
+                    bm25_results = self.knowledge_manager.search_bm25(query, limit)
+                    detailed_results = []
+                    for doc_id, score in bm25_results:
+                        try:
+                            knowledge_item = self.knowledge_manager.get_knowledge_by_id(doc_id)
+                            if knowledge_item:
+                                detailed_results.append({
+                                    "id": doc_id,
+                                    "topic": knowledge_item.get("topic", ""),
+                                    "content": knowledge_item.get("content", ""),
+                                    "source": knowledge_item.get("source", ""),
+                                    "created_at": knowledge_item.get("created_at", ""),
+                                    "score": score
+                                })
+                        except Exception as item_error:
+                            logger.error(f"Error retrieving knowledge item {doc_id}: {item_error}")
+                    
+                    logger.info("BM25 search completed successfully")
+                    return detailed_results
+                except Exception as bm25_error:
+                    logger.warning(f"BM25 search failed: {bm25_error}")
+                    return []
+        except Exception as e:
+            logger.error(f"Unexpected error during knowledge retrieval: {e}")
+            return []
+
+class IngestKnowledgeTool:
+    name = "ingest_knowledge"
+    description = "Ingest knowledge from a file (supported formats: .docx, .txt, .md). Example: {'file_path': 'C:/docs/guide.docx', 'topic': 'Troubleshooting Guide'}"
+    
+    def __init__(self):
+        self.knowledge_manager = KnowledgeManager()
+        # Initialize embedding model same as retrieval tool
+        self.embedding_model = self._init_embedding_model()
+        
+    def _init_embedding_model(self) -> Optional[Any]:
+        """初始化嵌入模型"""
+        try:
+            try:
+                import openai
+                if os.environ.get("OPENAI_API_KEY"):
+                    return "openai"
+            except ImportError:
+                pass
+            return None
+        except Exception:
+            return None
+
+    def __call__(self, file_path: str, topic: str = "General Knowledge") -> str:
+        """Read file and add to knowledge base."""
+        if not os.path.exists(file_path):
+            return f"Error: File '{file_path}' does not exist"
+        
+        ext = os.path.splitext(file_path)[1].lower()
+        content = ""
+        
+        try:
+            if ext == ".docx":
+                if not DOCX_AVAILABLE:
+                    return "Error: python-docx module not available. Cannot read .docx files."
+                doc = docx.Document(file_path)
+                content = "\n".join([p.text for p in doc.paragraphs if p.text.strip()])
+            elif ext in [".txt", ".md"]:
+                with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+                    content = f.read()
+            else:
+                return f"Error: Unsupported file extension '{ext}'"
+            
+            if not content.strip():
+                return f"Error: File '{file_path}' is empty"
+            
+            # Chunking logic
+            chunk_size = 1000
+            chunk_overlap = 200
+            
+            # Simple chunking
+            chunks = []
+            start = 0
+            while start < len(content):
+                end = start + chunk_size
+                chunk = content[start:end]
+                chunks.append(chunk)
+                start += chunk_size - chunk_overlap
+            
+            # Add chunks to knowledge base
+            added_count = 0
+            for i, chunk in enumerate(chunks):
+                chunk_topic = f"{topic} - Part {i+1}/{len(chunks)}"
+                embedding = generate_embedding(chunk, self.embedding_model)
+                
+                self.knowledge_manager.add_knowledge(
+                    topic=chunk_topic,
+                    content=chunk,
+                    source=os.path.basename(file_path),
+                    embedding=embedding
+                )
+                added_count += 1
+                
+            return f"Successfully ingested '{file_path}' into knowledge base. Added {added_count} chunks."
+            
+        except Exception as e:
+            return f"Error processing file: {str(e)}"
+
+class CheckRegistryKeyTool:
+    name = "check_registry_key"
+    description = "Return all values and subkeys in a registry key. Example: {'key_path': 'HKLM\\Software\\Microsoft\\Windows\\CurrentVersion'}"
+
+    def __call__(self, key_path: str) -> Dict[str, Any]:
+        """List values and subkeys in a registry key."""
+        if winreg is None:
+            return {"error": "winreg module not available (not on Windows?)"}
+        
+        try:
+            # Parse root key
+            parts = key_path.split('\\', 1)
+            root_str = parts[0].upper()
+            sub_key = parts[1] if len(parts) > 1 else ""
+            
+            roots = {
+                "HKLM": winreg.HKEY_LOCAL_MACHINE,
+                "HKEY_LOCAL_MACHINE": winreg.HKEY_LOCAL_MACHINE,
+                "HKCU": winreg.HKEY_CURRENT_USER,
+                "HKEY_CURRENT_USER": winreg.HKEY_CURRENT_USER,
+                "HKCR": winreg.HKEY_CLASSES_ROOT,
+                "HKEY_CLASSES_ROOT": winreg.HKEY_CLASSES_ROOT,
+                "HKU": winreg.HKEY_USERS,
+                "HKEY_USERS": winreg.HKEY_USERS,
+                "HKCC": winreg.HKEY_CURRENT_CONFIG,
+                "HKEY_CURRENT_CONFIG": winreg.HKEY_CURRENT_CONFIG
+            }
+            
+            if root_str not in roots:
+                return {"error": f"Invalid root key: {root_str}"}
+                
+            root_hkey = roots[root_str]
+            
+            try:
+                with winreg.OpenKey(root_hkey, sub_key, 0, winreg.KEY_READ) as key:
+                    # Enumerate values
+                    values = {}
+                    try:
+                        i = 0
+                        while True:
+                            name, value, type_ = winreg.EnumValue(key, i)
+                            values[name] = {"value": value, "type": type_}
+                            i += 1
+                    except OSError:
+                        pass  # End of enumeration
+                    
+                    # Enumerate subkeys
+                    subkeys = []
+                    try:
+                        i = 0
+                        while True:
+                            name = winreg.EnumKey(key, i)
+                            subkeys.append(name)
+                            i += 1
+                    except OSError:
+                        pass  # End of enumeration
+                        
+                    return {
+                        "path": key_path,
+                        "values": values,
+                        "subkeys": subkeys
+                    }
+            except FileNotFoundError:
+                return {"error": f"Registry key not found: {key_path}"}
+            except PermissionError:
+                return {"error": f"Permission denied accessing: {key_path}"}
+                
+        except Exception as e:
+            return {"error": str(e)}
+
+class ModifyRegistryKeyTool:
+    name = "modify_registry_key"
+    description = "Add, remove, or modify registry keys and values. Example: {'key_path': 'HKCU\\Software\\Test', 'operation': 'set_value', 'value_name': 'TestVal', 'value_data': '1', 'value_type': 'REG_SZ'}"
+    
+    def __call__(self, key_path: str, operation: str, value_name: str = None, value_data: Any = None, value_type: str = "REG_SZ") -> str:
+        """Modify registry keys and values."""
+        if winreg is None:
+            return "Error: winreg module not available"
+            
+        allowed_ops = ["create_key", "delete_key", "set_value", "delete_value"]
+        if operation not in allowed_ops:
+            return f"Error: Invalid operation. Must be one of {allowed_ops}"
+            
+        try:
+            parts = key_path.split('\\', 1)
+            root_str = parts[0].upper()
+            sub_key = parts[1] if len(parts) > 1 else ""
+            
+            roots = {
+                "HKLM": winreg.HKEY_LOCAL_MACHINE,
+                "HKEY_LOCAL_MACHINE": winreg.HKEY_LOCAL_MACHINE,
+                "HKCU": winreg.HKEY_CURRENT_USER,
+                "HKEY_CURRENT_USER": winreg.HKEY_CURRENT_USER,
+                "HKCR": winreg.HKEY_CLASSES_ROOT,
+                "HKEY_CLASSES_ROOT": winreg.HKEY_CLASSES_ROOT,
+                "HKU": winreg.HKEY_USERS,
+                "HKEY_USERS": winreg.HKEY_USERS,
+                "HKCC": winreg.HKEY_CURRENT_CONFIG,
+                "HKEY_CURRENT_CONFIG": winreg.HKEY_CURRENT_CONFIG
+            }
+            
+            if root_str not in roots:
+                return f"Error: Invalid root key: {root_str}"
+            
+            root_hkey = roots[root_str]
+            
+            if operation == "create_key":
+                winreg.CreateKey(root_hkey, sub_key)
+                return f"Successfully created key: {key_path}"
+                
+            elif operation == "delete_key":
+                try:
+                    winreg.DeleteKey(root_hkey, sub_key)
+                    return f"Successfully deleted key: {key_path}"
+                except OSError as e:
+                    return f"Error deleting key (might have subkeys?): {e}"
+
+            # For value operations, we need to open the key with write access
+            try:
+                # Try to open existing key
+                key = winreg.OpenKey(root_hkey, sub_key, 0, winreg.KEY_WRITE | winreg.KEY_READ)
+            except FileNotFoundError:
+                # If setting value, maybe create the key?
+                if operation == "set_value":
+                    key = winreg.CreateKey(root_hkey, sub_key)
+                else:
+                    return f"Error: Key not found: {key_path}"
+            
+            with key:
+                if operation == "set_value":
+                    if not value_name:
+                        return "Error: value_name required for set_value"
+                    
+                    # Map type string to winreg constant
+                    type_map = {
+                        "REG_SZ": winreg.REG_SZ,
+                        "REG_EXPAND_SZ": winreg.REG_EXPAND_SZ,
+                        "REG_DWORD": winreg.REG_DWORD,
+                        "REG_QWORD": winreg.REG_QWORD,
+                        "REG_MULTI_SZ": winreg.REG_MULTI_SZ,
+                        "REG_BINARY": winreg.REG_BINARY
+                    }
+                    reg_type = type_map.get(value_type.upper(), winreg.REG_SZ)
+                    
+                    # Convert data if needed
+                    if reg_type == winreg.REG_DWORD or reg_type == winreg.REG_QWORD:
+                        value_data = int(value_data)
+                    
+                    winreg.SetValueEx(key, value_name, 0, reg_type, value_data)
+                    return f"Successfully set value '{value_name}' in {key_path}"
+                    
+                elif operation == "delete_value":
+                    if not value_name:
+                        return "Error: value_name required for delete_value"
+                    winreg.DeleteValue(key, value_name)
+                    return f"Successfully deleted value '{value_name}' from {key_path}"
+                    
+        except Exception as e:
+            return f"Error performing {operation} on {key_path}: {str(e)}"
+
+class RunCmdCommandTool:
+    name = "run_cmd_command"
+    description = "Execute a Windows CMD command. Example: {'command': 'ipconfig /all'} or {'command': 'dir C:\\Windows'}"
+    
+    def __call__(self, command: str) -> str:
+        """Run a CMD command and return the output."""
+        try:
+            # Use cmd.exe explicitly
+            process = subprocess.run(
+                f"cmd.exe /c {command}", 
+                shell=True, 
+                capture_output=True, 
+                text=True, 
+                timeout=60
+            )
+            
+            output = f"Exit Code: {process.returncode}\n"
+            if process.stdout:
+                output += f"STDOUT:\n{process.stdout}\n"
+            if process.stderr:
+                output += f"STDERR:\n{process.stderr}\n"
+                
+            return output
+        except subprocess.TimeoutExpired:
+            return "Error: Command execution timed out after 60 seconds"
+        except Exception as e:
+            return f"Error executing command: {str(e)}"
+
+class ReportResultTool:
+    name = "report_result"
+    description = "Report the final result of the troubleshooting process."
+    
+    def __call__(self, summary: str, result: str) -> str:
+        """Report the final result."""
+        return f"Report generated successfully.\nSummary: {summary}\nResult: {result}"
+
+# Create tool instances
+memory = SQLiteMemory()
+
+list_log_files_tool = ListLogFilesTool()
+read_error_logs_tool = ReadErrorLogsTool()
+write_ps1_file_tool = WritePS1FileTool()
+run_ps1_test_tool = RunPS1TestTool()
+online_search_tool = OnlineSearchTool()
+knowledge_retrieval_tool = KnowledgeRetrievalTool()  # 不再需要传入memory参数
+check_registry_key_tool = CheckRegistryKeyTool()
+modify_registry_key_tool = ModifyRegistryKeyTool()
+run_cmd_command_tool = RunCmdCommandTool()
+ingest_knowledge_tool = IngestKnowledgeTool()
+report_result_tool = ReportResultTool()
+
+# Tool registry for easy access
+tools = {
+    "list_log_files": list_log_files_tool,
+    "read_error_logs": read_error_logs_tool,
+    "write_ps1_file": write_ps1_file_tool,
+    "run_ps1_test": run_ps1_test_tool,
+    "run_cmd_command": run_cmd_command_tool,
+    "online_search": online_search_tool,
+    "knowledge_retrieval": knowledge_retrieval_tool,
+    "ingest_knowledge": ingest_knowledge_tool,
+    "check_registry_key": check_registry_key_tool,
+    "modify_registry_key": modify_registry_key_tool,
+    "report_result": report_result_tool
+}
