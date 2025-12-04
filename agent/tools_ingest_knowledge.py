@@ -7,6 +7,13 @@ try:
     import winreg
 except ImportError:
     winreg = None
+
+try:
+    import docx
+    DOCX_AVAILABLE = True
+except ImportError:
+    DOCX_AVAILABLE = False
+
 from typing import List, Dict, Any, Optional
 from ddgs import DDGS
 from agent.memory import SQLiteMemory
@@ -15,6 +22,32 @@ from agent.knowledge_manager import KnowledgeManager
 # 配置日志记录器
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+def generate_embedding(text: str, model_type: Optional[str] = None) -> List[float]:
+    """生成文本的嵌入向量
+    
+    Args:
+        text: 输入文本
+        model_type: 模型类型 ("openai" 或 None)
+        
+    Returns:
+        嵌入向量列表
+    """
+    try:
+        if model_type == "openai":
+            import openai
+            response = openai.Embedding.create(
+                input=text,
+                model="text-embedding-ada-002"
+            )
+            return response['data'][0]['embedding']
+        
+        # 如果没有嵌入模型，返回默认向量
+        # 注意：在实际应用中，应该使用适当的嵌入模型
+        return [0.0] * 1536
+    except Exception as e:
+        logger.error(f"Failed to generate embedding: {e}")
+        return [0.0] * 1536
 
 class ListLogFilesTool:
     name = "list_log_files"
@@ -164,65 +197,28 @@ class KnowledgeRetrievalTool:
                     return "openai"
             except ImportError:
                 pass
-            
-            # 尝试导入其他嵌入模型库
-            # 这里可以添加其他嵌入模型的支持
-            
             return None
         except Exception:
             return None
     
-    def _generate_embedding(self, text: str) -> Optional[List[float]]:
-        """生成文本的嵌入向量"""
-        try:
-            if self.embedding_model == "openai":
-                import openai
-                response = openai.Embedding.create(
-                    input=text,
-                    model="text-embedding-ada-002"
-                )
-                return response['data'][0]['embedding']
-            
-            # 如果没有嵌入模型，返回默认向量
-            # 注意：在实际应用中，应该使用适当的嵌入模型
-            # 这里仅作为占位符
-            return [0.0] * 1536
-        except Exception as e:
-            logger.error(f"Failed to generate embedding: {e}")
-            return [0.0] * 1536
-    
     def __call__(self, query: str, limit: int = 5, alpha: float = 0.5) -> List[Dict[str, Any]]:
-        """使用混合搜索检索知识
-        
-        Args:
-            query: 查询文本
-            limit: 返回结果数量限制
-            alpha: 向量搜索权重 (0-1)，BM25权重为1-alpha
-            
-        Returns:
-            搜索结果列表
-        """
+        """使用混合搜索检索知识"""
         # 验证输入参数
         if not query or not isinstance(query, str):
             logger.error("Invalid query parameter")
             return []
         
-        # 确保limit是有效的正整数
         limit = max(1, min(100, int(limit)))
-        
-        # 确保alpha在有效范围内
         alpha = max(0.0, min(1.0, float(alpha)))
         
         try:
-            # 检查knowledge_manager是否初始化成功
             if self.knowledge_manager is None:
                 logger.error("Knowledge manager is not initialized")
                 return []
             
-            # 尝试执行混合搜索，但考虑到可能的错误
             try:
                 # 生成查询嵌入向量
-                query_embedding = self._generate_embedding(query)
+                query_embedding = generate_embedding(query, self.embedding_model)
                 
                 # 执行混合搜索
                 results = self.knowledge_manager.hybrid_search(
@@ -232,7 +228,6 @@ class KnowledgeRetrievalTool:
                     alpha=alpha
                 )
                 
-                # 格式化结果
                 formatted_results = []
                 for result in results:
                     formatted_results.append({
@@ -249,12 +244,9 @@ class KnowledgeRetrievalTool:
                 
                 # 如果混合搜索失败，回退到BM25搜索
                 try:
-                    # 尝试使用BM25搜索
                     bm25_results = self.knowledge_manager.search_bm25(query, limit)
-                    # 获取详细信息
                     detailed_results = []
                     for doc_id, score in bm25_results:
-                        # 查询详细信息
                         try:
                             knowledge_item = self.knowledge_manager.get_knowledge_by_id(doc_id)
                             if knowledge_item:
@@ -272,43 +264,88 @@ class KnowledgeRetrievalTool:
                     logger.info("BM25 search completed successfully")
                     return detailed_results
                 except Exception as bm25_error:
-                    logger.warning(f"BM25 search failed, falling back to simple search: {bm25_error}")
-                    
-                    # 最后回退到简单的SQL查询
-                    try:
-                        import sqlite3
-                        # 假设KnowledgeManager有一个db_path属性
-                        db_path = getattr(self.knowledge_manager, 'db_path', ':memory:')
-                        conn = sqlite3.connect(db_path)
-                        cursor = conn.cursor()
-                        
-                        cursor.execute('''
-                        SELECT id, topic, content, source, created_at 
-                        FROM knowledge_items 
-                        WHERE topic LIKE ? OR content LIKE ? 
-                        LIMIT ?
-                        ''', (f"%{query}%", f"%{query}%", limit))
-                        
-                        results = cursor.fetchall()
-                        conn.close()
-                        
-                        simple_results = [{
-                            "id": result[0],
-                            "topic": result[1],
-                            "content": result[2],
-                            "source": result[3],
-                            "created_at": result[4],
-                            "score": 1.0
-                        } for result in results]
-                        
-                        logger.info("Simple SQL search completed successfully")
-                        return simple_results
-                    except Exception as simple_error:
-                        logger.error(f"Simple SQL search failed: {simple_error}")
-                        return []
+                    logger.warning(f"BM25 search failed: {bm25_error}")
+                    return []
         except Exception as e:
             logger.error(f"Unexpected error during knowledge retrieval: {e}")
             return []
+
+class IngestKnowledgeTool:
+    name = "ingest_knowledge"
+    description = "Ingest knowledge from a file (supported formats: .docx, .txt, .md). Example: {'file_path': 'C:/docs/guide.docx', 'topic': 'Troubleshooting Guide'}"
+    
+    def __init__(self):
+        self.knowledge_manager = KnowledgeManager()
+        # Initialize embedding model same as retrieval tool
+        self.embedding_model = self._init_embedding_model()
+        
+    def _init_embedding_model(self) -> Optional[Any]:
+        """初始化嵌入模型"""
+        try:
+            try:
+                import openai
+                if os.environ.get("OPENAI_API_KEY"):
+                    return "openai"
+            except ImportError:
+                pass
+            return None
+        except Exception:
+            return None
+
+    def __call__(self, file_path: str, topic: str = "General Knowledge") -> str:
+        """Read file and add to knowledge base."""
+        if not os.path.exists(file_path):
+            return f"Error: File '{file_path}' does not exist"
+        
+        ext = os.path.splitext(file_path)[1].lower()
+        content = ""
+        
+        try:
+            if ext == ".docx":
+                if not DOCX_AVAILABLE:
+                    return "Error: python-docx module not available. Cannot read .docx files."
+                doc = docx.Document(file_path)
+                content = "\n".join([p.text for p in doc.paragraphs if p.text.strip()])
+            elif ext in [".txt", ".md"]:
+                with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+                    content = f.read()
+            else:
+                return f"Error: Unsupported file extension '{ext}'"
+            
+            if not content.strip():
+                return f"Error: File '{file_path}' is empty"
+            
+            # Chunking logic
+            chunk_size = 1000
+            chunk_overlap = 200
+            
+            # Simple chunking
+            chunks = []
+            start = 0
+            while start < len(content):
+                end = start + chunk_size
+                chunk = content[start:end]
+                chunks.append(chunk)
+                start += chunk_size - chunk_overlap
+            
+            # Add chunks to knowledge base
+            added_count = 0
+            for i, chunk in enumerate(chunks):
+                chunk_topic = f"{topic} - Part {i+1}/{len(chunks)}"
+                embedding = generate_embedding(chunk, self.embedding_model)
+                
+                self.knowledge_manager.add_knowledge(
+                    topic=chunk_topic,
+                    content=chunk,
+                    source=os.path.basename(file_path),
+                    embedding=embedding
+                )
+                added_count += 1
+                
+            return f"Successfully ingested '{file_path}' into knowledge base. Added {added_count} chunks."
+            
+        except Exception as e:
+            return f"Error processing file: {str(e)}"
 
 class CheckRegistryKeyTool:
     name = "check_registry_key"
@@ -515,20 +552,23 @@ write_ps1_file_tool = WritePS1FileTool()
 run_ps1_test_tool = RunPS1TestTool()
 online_search_tool = OnlineSearchTool()
 knowledge_retrieval_tool = KnowledgeRetrievalTool()  # 不再需要传入memory参数
-report_result_tool = ReportResultTool()
 check_registry_key_tool = CheckRegistryKeyTool()
 modify_registry_key_tool = ModifyRegistryKeyTool()
 run_cmd_command_tool = RunCmdCommandTool()
+ingest_knowledge_tool = IngestKnowledgeTool()
+report_result_tool = ReportResultTool()
+
 # Tool registry for easy access
 tools = {
     "list_log_files": list_log_files_tool,
     "read_error_logs": read_error_logs_tool,
     "write_ps1_file": write_ps1_file_tool,
     "run_ps1_test": run_ps1_test_tool,
+    "run_cmd_command": run_cmd_command_tool,
     "online_search": online_search_tool,
     "knowledge_retrieval": knowledge_retrieval_tool,
-    "report_result": report_result_tool,
+    "ingest_knowledge": ingest_knowledge_tool,
     "check_registry_key": check_registry_key_tool,
     "modify_registry_key": modify_registry_key_tool,
-    "run_cmd_command": run_cmd_command_tool
+    "report_result": report_result_tool
 }

@@ -137,8 +137,11 @@ class ReactAgent:
         - read_error_logs: Read error messages from log files (Example params: {{"file_path": "C:/Windows/Logs/System.evtx", "max_lines": 100}})
         - write_ps1_file: Create PowerShell scripts (Example params: {{"file_path": "C:/temp/fix_settings.ps1", "content": "Get-AppxPackage Microsoft.Windows.SettingsApp | Reset-AppxPackage"}})
         - run_ps1_test: Run PowerShell scripts (Example params: {{"file_path": "C:/temp/fix_settings.ps1"}})
+        - run_cmd_command: Execute a Windows CMD command (Example params: {{"command": "ipconfig /all"}})
         - online_search: Search the internet (Example params: {{"query": "Windows 11 Settings app not opening fix", "max_results": 3}})
         - knowledge_retrieval: Retrieve knowledge from database (Example params: {{"query": "Windows Settings app repair methods", "limit": 5}})
+        - check_registry_key: Return all values and subkeys in a registry key (Example params: {{"key_path": "HKLM\\Software\\Microsoft\\Windows\\CurrentVersion"}})
+        - modify_registry_key: Add, remove, or modify registry keys and values (Example params: {{"key_path": "HKCU\\Software\\Test", "operation": "set_value", "value_name": "TestVal", "value_data": "1", "value_type": "REG_SZ"}})
         
         Create a comprehensive plan with at least 3-5 tasks that thoroughly address the issue.
         
@@ -357,7 +360,7 @@ class ReactAgent:
             for task in state["plan"].get("tasks", []):
                 if task["task_id"] == task_id:
                     task["status"] = "completed"
-                    break
+                    #break
                     
         return {
             "user_query": state["user_query"],
@@ -421,8 +424,11 @@ class ReactAgent:
             - read_error_logs: Read error messages from log files (Example params: {{"file_path": "C:/Windows/Logs/System.evtx", "max_lines": 100}})
             - write_ps1_file: Create PowerShell scripts (Example params: {{"file_path": "C:/temp/fix_settings.ps1", "content": "Get-AppxPackage Microsoft.Windows.SettingsApp | Reset-AppxPackage"}})
             - run_ps1_test: Run PowerShell scripts (Example params: {{"file_path": "C:/temp/fix_settings.ps1"}})
+            - run_cmd_command: Execute a Windows CMD command (Example params: {{"command": "ipconfig /all"}})
             - online_search: Search the internet (Example params: {{"query": "Windows 11 Settings app not opening fix", "max_results": 3}})
             - knowledge_retrieval: Retrieve knowledge from database (Example params: {{"query": "Windows Settings app repair methods", "limit": 5}})
+            - check_registry_key: Return all values and subkeys in a registry key (Example params: {{"key_path": "HKLM\\Software\\Microsoft\\Windows\\CurrentVersion"}})
+            - modify_registry_key: Add, remove, or modify registry keys and values (Example params: {{"key_path": "HKCU\\Software\\Test", "operation": "set_value", "value_name": "TestVal", "value_data": "1", "value_type": "REG_SZ"}})
             
             Keep modifications minimal and focused. If no changes are needed, set should_modify_plan to false.
             Always prioritize making forward progress and avoiding repetition.
