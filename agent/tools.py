@@ -118,7 +118,7 @@ class OnlineSearchTool:
     name = "online_search"
     description = "Search the internet using DuckDuckGo for the given query. Example: {{\"query\": \"Windows 11 Settings app not opening fix\", \"max_results\": 3}} to search for troubleshooting solutions."
     
-    def __call__(self, query: str, max_results: int = 5) -> List[Dict[str, str]]:
+    def __call__(self, query: str, max_results: int = 10) -> List[Dict[str, str]]:
         """Search the internet using DuckDuckGo."""
         try:
             with DDGS() as ddgs:

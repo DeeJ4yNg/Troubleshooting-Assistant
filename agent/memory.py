@@ -77,6 +77,18 @@ class SQLiteMemory:
         conn.commit()
         conn.close()
     
+    def clear_memory(self):
+        """Clear all memory tables."""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        
+        tables = ["plans", "plan_tasks", "conversations", "knowledge", "observations"]
+        for table in tables:
+            cursor.execute(f"DELETE FROM {table}")
+            
+        conn.commit()
+        conn.close()
+
     def save_plan(self, plan_id, user_query, plan_content):
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()

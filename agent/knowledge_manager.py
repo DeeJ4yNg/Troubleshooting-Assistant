@@ -13,31 +13,16 @@ except ImportError:
     LANGCHAIN_AVAILABLE = False
     print("Warning: langchain not available. Text chunking functionality will be limited.")
 
-# 尝试导入hnswlib，如果失败则设置标志
+# 尝试导入faiss
 try:
-    import hnswlib
-    HNSWLIB_AVAILABLE = True
+    import faiss
+    FAISS_AVAILABLE = True
 except ImportError:
-    HNSWLIB_AVAILABLE = False
-    print("Warning: hnswlib not available. Trying alternative ANN libraries.")
-
-# 尝试导入annoy作为替代选项
-try:
-    import annoy
-    ANNOY_AVAILABLE = True
-except ImportError:
-    ANNOY_AVAILABLE = False
-    print("Warning: annoy not available. Using linear search as fallback.")
+    FAISS_AVAILABLE = False
+    print("Warning: faiss not available. Using linear search as fallback.")
 
 # 设置当前使用的ANN算法
-ANN_ENGINE = None
-if HNSWLIB_AVAILABLE:
-    ANN_ENGINE = "hnswlib"
-elif ANNOY_AVAILABLE:
-    ANN_ENGINE = "annoy"
-else:
-    ANN_ENGINE = "linear"  # 线性搜索作为最后的备选方案
-    print("Info: Using linear search for vector operations. This may be slower for large datasets.")
+ANN_ENGINE = "faiss" if FAISS_AVAILABLE else "linear"
 
 class KnowledgeManager:
     def __init__(self, db_path="knowledge_db.db", embedding_dim=1536, preferred_ann_engine=None):
@@ -46,31 +31,13 @@ class KnowledgeManager:
         Args:
             db_path: 数据库文件路径
             embedding_dim: 嵌入向量维度（默认1536，适合OpenAI等模型）
-            preferred_ann_engine: 首选的ANN引擎，可选值: "hnswlib", "annoy", "linear"。
-                                如果为None，则自动选择可用的最佳引擎
+            preferred_ann_engine: 已弃用，保留是为了兼容性
         """
         self.db_path = db_path
         self.embedding_dim = embedding_dim
         self._init_db()
         
-        # 如果指定了首选引擎，尝试使用它
-        if preferred_ann_engine:
-            global ANN_ENGINE
-            original_ann_engine = ANN_ENGINE
-            
-            # 根据指定的引擎重新设置全局变量
-            if preferred_ann_engine == "hnswlib" and HNSWLIB_AVAILABLE:
-                ANN_ENGINE = "hnswlib"
-            elif preferred_ann_engine == "annoy" and ANNOY_AVAILABLE:
-                ANN_ENGINE = "annoy"
-            elif preferred_ann_engine == "linear":
-                ANN_ENGINE = "linear"
-            else:
-                print(f"Warning: Preferred ANN engine '{preferred_ann_engine}' not available. Using default.")
-                # 恢复原来的引擎选择
-                ANN_ENGINE = original_ann_engine
-        
-        # 初始化ANN索引（支持多种算法）
+        # 初始化ANN索引
         self._init_ann_index()
         
         # 初始化BM25相关数据
@@ -140,19 +107,18 @@ class KnowledgeManager:
         conn.close()
     
     def _init_ann_index(self):
-        """初始化ANN索引（支持多种算法）"""
+        """初始化ANN索引"""
         try:
-            if ANN_ENGINE == "hnswlib":
-                # 创建HNSW索引
-                self.index = hnswlib.Index(space='cosine', dim=self.embedding_dim)
-            elif ANN_ENGINE == "annoy":
-                # 创建Annoy索引
-                self.index = annoy.AnnoyIndex(self.embedding_dim, metric='angular')
-                # 存储映射关系，因为annoy使用整数索引
-                self.annoy_id_map = {}
-                self.reverse_annoy_id_map = {}
+            self.id_map = {} # Map FAISS internal IDs to database IDs
+            self.reverse_id_map = {} # Map database IDs to FAISS internal IDs
+            
+            if ANN_ENGINE == "faiss":
+                # Create FAISS index
+                # We use IndexFlatL2 for exact search or IndexIVFFlat for faster search on large datasets
+                # Here we use IndexFlatL2 for simplicity and accuracy on smaller datasets
+                self.index = faiss.IndexFlatL2(self.embedding_dim)
             elif ANN_ENGINE == "linear":
-                # 线性搜索不需要预构建索引
+                # Linear search doesn't need pre-built index
                 self.index = None
                 self.linear_embeddings = []
                 self.linear_ids = []
@@ -239,7 +205,7 @@ class KnowledgeManager:
         return chunks
     
     def _rebuild_ann_index(self):
-        """重建ANN索引（支持多种算法）"""
+        """重建ANN索引"""
         try:
             conn = sqlite3.connect(self.db_path)
             cursor = conn.cursor()
@@ -250,64 +216,44 @@ class KnowledgeManager:
             
             conn.close()
             
-            # 根据不同的ANN引擎执行不同的索引重建逻辑
-            if ANN_ENGINE == "hnswlib" and self.index is not None:
+            # Clear existing maps
+            self.id_map = {}
+            self.reverse_id_map = {}
+            
+            if ANN_ENGINE == "faiss" and self.index is not None:
+                # Reset index
+                self.index = faiss.IndexFlatL2(self.embedding_dim)
+                
                 if not results:
-                    # 如果没有数据，初始化一个空索引
-                    self.index.init_index(max_elements=1000, ef_construction=200, M=16)
                     return
                 
-                # 准备数据
-                item_ids = []
                 embeddings = []
+                ids = []
                 
-                for item_id, embedding_blob in results:
-                    if embedding_blob:
-                        # 从二进制数据中恢复向量
-                        embedding = np.frombuffer(embedding_blob, dtype=np.float32)
-                        item_ids.append(item_id)
-                        embeddings.append(embedding)
-                
-                # 初始化并填充索引
-                self.index.init_index(max_elements=len(item_ids) * 2, ef_construction=200, M=16)
-                self.index.add_items(np.array(embeddings), np.array(item_ids))
-                
-                # 设置查询参数
-                self.index.set_ef(100)
-                
-            elif ANN_ENGINE == "annoy" and self.index is not None:
-                # 清空现有的映射和索引
-                self.annoy_id_map = {}
-                self.reverse_annoy_id_map = {}
-                
-                # 为每个知识项分配annoy内部ID
                 for i, (item_id, embedding_blob) in enumerate(results):
                     if embedding_blob:
-                        # 从二进制数据中恢复向量
                         embedding = np.frombuffer(embedding_blob, dtype=np.float32)
-                        # 添加到annoy索引
-                        self.index.add_item(i, embedding.tolist())  # annoy需要Python列表
-                        # 保存映射关系
-                        self.annoy_id_map[item_id] = i
-                        self.reverse_annoy_id_map[i] = item_id
+                        embeddings.append(embedding)
+                        # FAISS uses integer IDs starting from 0 (if using add)
+                        # or we can use IndexIDMap to supply custom IDs, but let's stick to simple map
+                        self.id_map[i] = item_id
+                        self.reverse_id_map[item_id] = i
                 
-                # 构建annoy索引（如果有数据）
-                if results:
-                    self.index.build(10)  # n_trees参数
+                if embeddings:
+                    embeddings_np = np.array(embeddings).astype('float32')
+                    self.index.add(embeddings_np)
                     
             elif ANN_ENGINE == "linear":
-                # 准备线性搜索所需的数据
+                # Prepare data for linear search
                 self.linear_embeddings = []
                 self.linear_ids = []
                 
                 for item_id, embedding_blob in results:
                     if embedding_blob:
-                        # 从二进制数据中恢复向量
                         embedding = np.frombuffer(embedding_blob, dtype=np.float32)
                         self.linear_embeddings.append(embedding)
                         self.linear_ids.append(item_id)
                 
-                # 转换为numpy数组以提高计算效率
                 if self.linear_embeddings:
                     self.linear_embeddings = np.array(self.linear_embeddings)
                     
@@ -655,39 +601,33 @@ class KnowledgeManager:
             query_vec = np.array(query_embedding, dtype=np.float32)
             
             # 根据不同的ANN引擎执行搜索
-            if ANN_ENGINE == "hnswlib" and self.index is not None:
-                # 检查索引是否为空
-                if self.index.get_current_count() == 0:
+            if ANN_ENGINE == "faiss" and self.index is not None:
+                # Check if index is empty
+                if self.index.ntotal == 0:
                     return []
                 
-                # 搜索
-                labels, distances = self.index.knn_query(query_vec.reshape(1, -1), k=limit)
+                # Search
+                # FAISS expects query to be (1, d) array
+                D, I = self.index.search(query_vec.reshape(1, -1), limit)
                 
-                # 计算相似度（1 - 距离，因为使用余弦距离）
+                # Calculate similarity (convert L2 distance to similarity score if needed, or just use negative distance)
+                # For L2, smaller is better. We can convert to a similarity score like 1/(1+distance)
+                # or just return negative distance if the caller expects higher score = better match
+                
                 results = []
-                for i in range(len(labels[0])):
-                    doc_id = labels[0][i]
-                    similarity = 1 - distances[0][i]
-                    results.append((doc_id, similarity))
-                
-                return results
-                
-            elif ANN_ENGINE == "annoy" and self.index is not None:
-                # 检查索引是否为空
-                if len(self.annoy_id_map) == 0:
-                    return []
-                
-                # 搜索（annoy需要Python列表）
-                indices, distances = self.index.get_nns_by_vector(query_vec.tolist(), limit, include_distances=True)
-                
-                # 计算相似度并转换ID
-                results = []
-                for i, (annoy_idx, distance) in enumerate(zip(indices, distances)):
-                    # annoy的angular距离需要转换为相似度
-                    similarity = 1 - (distance / 2)  # 简单转换：angular distance -> cosine similarity
-                    # 获取原始文档ID
-                    doc_id = self.reverse_annoy_id_map.get(annoy_idx)
+                for i in range(len(I[0])):
+                    faiss_id = I[0][i]
+                    distance = D[0][i]
+                    
+                    if faiss_id == -1: # No match found
+                        continue
+                        
+                    # Get database ID
+                    doc_id = self.id_map.get(faiss_id)
+                    
                     if doc_id is not None:
+                         # Convert L2 distance to similarity (0 to 1 range approx)
+                        similarity = 1 / (1 + distance)
                         results.append((doc_id, similarity))
                 
                 return results

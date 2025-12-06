@@ -2,6 +2,7 @@ from typing import Dict, Any, List, Optional, Sequence, Annotated
 from langgraph.graph import StateGraph, END
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser, JsonOutputParser
+from langchain_core.tools import StructuredTool, render_text_description
 from pydantic.v1 import BaseModel, Field
 from langchain_openai import ChatOpenAI
 from agent.memory import SQLiteMemory
@@ -53,7 +54,39 @@ class ReactAgent:
             temperature=0.7
         )
         self.graph = self._build_graph()
+        
+        # Ask user if they want to clean memory
+        if self.ui:
+            self._ask_to_clean_memory()
     
+    def _ask_to_clean_memory(self):
+        """Ask user if they want to clean the memory."""
+        from rich.prompt import Confirm
+        try:
+            if Confirm.ask("[bold red]Do you want to clean the agent memory before starting?[/bold red]", default=False):
+                self.memory.clear_memory()
+                self.console.print("[green]Memory cleaned successfully.[/green]")
+        except Exception as e:
+            self.console.print(f"[red]Error cleaning memory: {e}[/red]")
+
+    def _get_langchain_tools(self) -> List[StructuredTool]:
+        """Convert agent tools to LangChain StructuredTool objects."""
+        langchain_tools = []
+        for name, tool in tools.items():
+            if hasattr(tool, "name") and hasattr(tool, "description") and hasattr(tool, "__call__"):
+                # Create StructuredTool from the tool's __call__ method
+                # We need to access the __call__ method of the instance
+                func = tool.__call__
+                
+                # Create the tool
+                l_tool = StructuredTool.from_function(
+                    func=func,
+                    name=name,
+                    description=tool.description
+                )
+                langchain_tools.append(l_tool)
+        return langchain_tools
+
     def _build_graph(self):
         """Build the LangGraph workflow graph."""
         # Create the workflow graph
@@ -120,6 +153,8 @@ class ReactAgent:
             tool: str = Field(description="The appropriate tool to use")
             params: Dict[str, Any] = Field(description="Proper parameters for the tool")
             status: str = Field(description="Initial status of the task", default="pending")
+            result: Optional[str] = Field(description="Result of the task execution (success/failure)", default=None)
+            reason: Optional[str] = Field(description="Reason for the result or status", default=None)
 
         class Plan(BaseModel):
             tasks: List[Task] = Field(description="List of troubleshooting tasks")
@@ -127,27 +162,29 @@ class ReactAgent:
         # Set up the parser
         parser = JsonOutputParser(pydantic_object=Plan)
 
+        # Get tools and generate description using LangChain
+        langchain_tools = self._get_langchain_tools()
+        tool_descriptions = render_text_description(langchain_tools)
+
         prompt = ChatPromptTemplate.from_template("""
         You are a Windows OS troubleshooting expert. Create a detailed step-by-step plan to troubleshoot the following issue:
         
         {user_query}
         
         The plan should include multiple specific tasks that can be executed using the following tools:
-        - list_log_files: List log files in a directory (Example params: {{"path": "C:/Windows/Logs"}})
-        - read_error_logs: Read error messages from log files (Example params: {{"file_path": "C:/Windows/Logs/System.evtx", "max_lines": 100}})
-        - write_ps1_file: Create PowerShell scripts (Example params: {{"file_path": "C:/temp/fix_settings.ps1", "content": "Get-AppxPackage Microsoft.Windows.SettingsApp | Reset-AppxPackage"}})
-        - run_ps1_test: Run PowerShell scripts (Example params: {{"file_path": "C:/temp/fix_settings.ps1"}})
-        - run_cmd_command: Execute a Windows CMD command (Example params: {{"command": "ipconfig /all"}})
-        - online_search: Search the internet (Example params: {{"query": "Windows 11 Settings app not opening fix", "max_results": 3}})
-        - knowledge_retrieval: Retrieve knowledge from database (Example params: {{"query": "Windows Settings app repair methods", "limit": 5}})
-        - check_registry_key: Return all values and subkeys in a registry key (Example params: {{"key_path": "HKLM\\Software\\Microsoft\\Windows\\CurrentVersion"}})
-        - modify_registry_key: Add, remove, or modify registry keys and values (Example params: {{"key_path": "HKCU\\Software\\Test", "operation": "set_value", "value_name": "TestVal", "value_data": "1", "value_type": "REG_SZ"}})
+        {tool_descriptions}
         
-        Create a comprehensive plan with at least 3-5 tasks that thoroughly address the issue.
+        Based on the knowledge you have and the tools available, create a comprehensive plan with ONLY 3-5 tasks that thoroughly address the issue.
         
         {format_instructions}
         
-        The user's query is: {user_query}
+        Remember:
+        1. Each task must have a unique task_id.
+        2. The tool parameter must be one of the available tools.
+        3. The params parameter must contain the correct parameters for the selected tool.
+        4. Each task must have a clear description.
+        5. The plan must be executable using the available tools.
+        6. Always try to search for relevant information before executing any scripts.
         """)
         
         if state.get("plan"):
@@ -158,7 +195,8 @@ class ReactAgent:
         try:
             plan = chain.invoke({
                 "user_query": state["user_query"],
-                "format_instructions": parser.get_format_instructions()
+                "format_instructions": parser.get_format_instructions(),
+                "tool_descriptions": tool_descriptions
             })
             print(f"Generated plan: {plan}")  # Debug print
             
@@ -167,7 +205,11 @@ class ReactAgent:
                 for task in plan["tasks"]:
                     if "status" not in task:
                         task["status"] = "pending"
-                        
+                    if "result" not in task:
+                        task["result"] = "N/A"
+                    if "reason" not in task:
+                        task["reason"] = "N/A"
+            
         except Exception as e:
             print(f"Error generating plan: {e}")
             # Fallback plan
@@ -339,7 +381,9 @@ class ReactAgent:
         
         confirm = Prompt.ask(f"[bold yellow]Are you sure you want to execute tool: {tool_name} with params: {params}? (yes/no)[/bold yellow]")
         if confirm.lower() != "yes":
-            return state
+            console.print("[bold red]Tool execution cancelled by user[/bold red]")
+            exit(0)
+            #return state
         # Get the tool instance
         tool = tools.get(tool_name)
         if not tool:
@@ -437,10 +481,11 @@ class ReactAgent:
             1.NO DUPLICATE TASKS IN THE PLAN!
             2.All tasks in the plan should be executable by the available tools.
             3.If a task is not executable, remove it from the plan!
-            4.Do not remove the current task from the plan!
-            5.Do not remove the completed tasks!
-            6.All plan modifications must be added to "modifications" list!!!
-            7.Respond with a JSON object containing:
+            4.DO NOT REMOVE OR MODIFY THE CURRENT TASK FROM THE PLAN!!!
+            5.DO NOT REMOVE OR MODIFY THE TASKS THAT ARE COMPLETED!!!
+            6.DO NOT MODIFY THE RESULT AND REASON FOR THE TASKS THAT ARE NOT COMPLETED YET!!! 
+            7.All plan modifications must be added to "modifications" list!!!
+            8.Respond with a JSON object containing:
             {{
                 "success": true/false,
                 "analysis": "Brief analysis of the result, do not contain any plan modifications.",
@@ -570,6 +615,30 @@ class ReactAgent:
         """Modify the plan based on the tool result and LLM analysis."""
         # Note: Task status is already marked as completed in _execute_confirmed_tool
         
+        # Update the executed task with detailed result and reason from observation
+        current_task_in_state = state.get("current_task")
+        observation = state.get("observation", {})
+        
+        if current_task_in_state and observation:
+             task_id = current_task_in_state.get("task_id")
+             plan_tasks = state["plan"].get("tasks", [])
+             for task in plan_tasks:
+                 if task.get("task_id") == task_id:
+                     # Update status just in case, and add result/reason
+                     task["status"] = "completed"
+                     task["result"] = "success" if observation.get("success", False) else "failure"
+                     
+                     # Use LLM analysis or details as reason
+                     llm_analysis = observation.get("llm_analysis", "")
+                     reason_text = ""
+                     if isinstance(llm_analysis, dict):
+                        reason_text = llm_analysis.get("analysis", str(llm_analysis))
+                     else:
+                        reason_text = str(llm_analysis) if llm_analysis else str(observation.get("details", ""))
+                     
+                     task["reason"] = f"{reason_text[:500]}..." # Truncate if too long"
+                     break
+        
         # Fall back to existing observation-based modifications if no tool result or LLM fails
         if state.get("observation", {}).get("should_modify_plan", False) or state.get("observation", {}).get("should_modify_plan", {}):
             modifications = state.get("observation", {}).get("plan_modifications", [])
@@ -583,6 +652,11 @@ class ReactAgent:
                 if mod_type == "add" and "new_task" in modification:
                     # Add new task
                     new_task = modification["new_task"]
+                    # Detect if the new task is a duplicated one, if yes, skip it.
+                    if any(task.get("task_id") == new_task.get("task_id") for task in plan_tasks):
+                        self.console.print(f"[bold yellow]Duplicated task {new_task.get('task_id', 'N/A')} - Reason: {reason}[/bold yellow]")
+                        continue
+
                     # Ensure the new task has all required fields
                     if "task_id" not in new_task:
                         # Generate a new task ID
@@ -658,13 +732,17 @@ class ReactAgent:
         table.add_column("Tool")
         table.add_column("Params", style="dim")
         table.add_column("Status")
+        table.add_column("Result")
+        table.add_column("Reason")
         for task in state["plan"]["tasks"]:
             table.add_row(
                 task["task_id"],
                 task.get("description", "N/A"),
                 task.get("tool", "N/A"),
                 str(task.get("params", {})),
-                task.get("status", "N/A")
+                task.get("status", "N/A"),
+                task.get("result", "N/A"),
+                task.get("reason", "N/A")
             )
         self.console.print(table)
 
@@ -719,6 +797,7 @@ class ReactAgent:
         The observation is: {observation}
         DO NOT reply no if you see any task status is pending!
         If all task status is completed, check if the tool result is valid without any error, if not, REPLY yes to continue troubleshooting!
+        If you think you have done all the tasks and all things you can do but not sure if the issue is resolved or not, REPLY no to complete the troubleshooting process and user can check the result!
         Should the agent continue troubleshooting? (ONLY REPLY yes/no)!
         """)
         chain = continue_prompt | self.llm | StrOutputParser()
