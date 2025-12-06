@@ -654,7 +654,7 @@ class ReactAgent:
                     new_task = modification["new_task"]
                     # Detect if the new task is a duplicated one, if yes, skip it.
                     if any(task.get("task_id") == new_task.get("task_id") for task in plan_tasks):
-                        self.console.print(f"[bold yellow]Duplicated task {new_task.get('task_id', 'N/A')} - Reason: {reason}[/bold yellow]")
+                        self.console.print(f"[bold yellow]Duplicated task {new_task.get('task_id', 'N/A')}. Task: {new_task.get('description', 'N/A')} - Reason: {reason}[/bold yellow]")
                         continue
 
                     # Ensure the new task has all required fields
