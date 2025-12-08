@@ -1,6 +1,6 @@
 # Windows OS Troubleshooting Agent
 
-An intelligent agent that helps diagnose and troubleshoot Windows OS issues using AI-powered planning and execution.
+An intelligent AI-powered agent that helps diagnose and troubleshoot Windows OS issues using advanced language models and automated system diagnostics.
 
 ## Features
 
@@ -11,116 +11,207 @@ An intelligent agent that helps diagnose and troubleshoot Windows OS issues usin
 - **Interactive Interface**: Rich command-line interface with clear progress indicators and results
 - **Human-in-the-Loop**: Requires user confirmation before executing potentially impactful actions
 - **Persistent Memory**: Remembers past interactions for improved troubleshooting over time
+- **Knowledge Base**: Built-in knowledge management system for storing and retrieving troubleshooting information
 
 ## Prerequisites
 
-- Python 3.9+
-- Windows OS (tested on Windows 10/11)
-- API key for an LLM service (OpenAI, SiliconFlow, etc.)
+- **Operating System**: Windows 10/11 (required for Windows-specific diagnostics)
+- **Python**: 3.11 or higher
+- **API Access**: LLM service API key (OpenAI, or compatible providers)
 
-## Installation
+## Quick Start
 
-1. Clone the repository:
+### Option 1: Using Conda (Recommended)
+
+1. **Clone and navigate to the project:**
    ```bash
    git clone <repository-url>
    cd MyAgent_AutoDesktopFixer_SingleAgent
    ```
 
-2. Install the required packages:
+2. **Create and activate conda environment:**
+   ```bash
+   conda create -n windows-troubleshooter python=3.11
+   conda activate windows-troubleshooter
+   ```
+
+3. **Install dependencies:**
    ```bash
    pip install -r requirements.txt
    ```
 
-3. Configure your API key:
-   Create a `.env` file in the project root with your API credentials:
+### Option 2: Using uv (Fast Alternative)
+
+1. **Install uv (if not already installed):**
+   ```bash
+   pip install uv
+   ```
+
+2. **Clone and setup project:**
+   ```bash
+   git clone <repository-url>
+   cd MyAgent_AutoDesktopFixer_SingleAgent
+   ```
+
+3. **Create virtual environment and install dependencies:**
+   ```bash
+   uv venv --python python3.11
+   uv pip install -r requirements.txt
+   ```
+
+4. **Activate the environment:**
+   ```bash
+   # On Windows (PowerShell):
+   .venv\Scripts\activate
+   # On Windows (Command Prompt):
+   .venv\Scripts\activate.bat
+   ```
+
+### Option 3: Using Standard venv
+
+1. **Setup project:**
+   ```bash
+   git clone <repository-url>
+   cd MyAgent_AutoDesktopFixer_SingleAgent
+   python -m venv venv
+   ```
+
+2. **Activate environment and install:**
+   ```bash
+   # Windows PowerShell:
+   .\venv\Scripts\Activate.ps1
+   # Windows Command Prompt:
+   .\venv\Scripts\activate.bat
+   pip install -r requirements.txt
+   ```
+
+## Configuration
+
+1. **Create environment file:**
+   Create a new `.env` file in the project root:
+
+2. **Configure API settings:**
    ```env
+   # Required: Your LLM API key
    OPENAI_API_KEY="your-api-key-here"
-   OPENAI_MODEL="Qwen/Qwen2.5-7B-Instruct"  # or your preferred model
-   OPENAI_API_BASE="https://api.siliconflow.cn/v1"  # or your API endpoint
+   
+   # Optional: Model configuration (defaults shown)
+   OPENAI_MODEL="gpt-4o-mini"
+   OPENAI_API_BASE="https://api.openai.com/v1"
    ```
 
 ## Usage
 
-Run the agent with:
+### Basic Usage
+
+Run the main troubleshooting agent:
 ```bash
 python main.py
 ```
 
-Then describe your Windows issue when prompted. The agent will:
-1. Generate a detailed troubleshooting plan
-2. Ask for your confirmation before proceeding
-3. Execute the plan using various system tools
-4. Present a comprehensive solution report
+**Interactive Session:**
+1. Describe your Windows issue when prompted
+2. Review the generated troubleshooting plan
+3. Confirm execution (the agent will ask for permission)
+4. View the comprehensive solution report
 
-### Rich UI Demo
+**Example Issues to Try:**
+- "Windows Update keeps failing"
+- "I cannot create new .xlsx file from right-click menu"
+- "I'm getting blue screen errors"
 
-To see the enhanced capabilities with a beautiful visual interface, run the demo:
+### Advanced Features
+
+**Knowledge Management:**
 ```bash
-python demo_rich_ui.py
+python Add_Knowledge_Script.py
 ```
-
-This demo showcases:
-- Intelligent observation of tool results with LLM analysis
-- Dynamic plan modification based on findings
-- Beautiful Rich UI with panels, tables, and progress indicators
+Add custom troubleshooting knowledge to the agent's knowledge base.
 
 ## How It Works
 
-1. **Problem Analysis**: The agent uses an LLM to understand your issue and create a step-by-step troubleshooting plan
-2. **Tool Selection**: Based on the problem, it selects appropriate tools like:
+1. **Problem Analysis**: The agent uses LLM to understand your issue and create a step-by-step troubleshooting plan
+2. **Tool Selection**: Automatically selects appropriate diagnostic tools based on the problem:
    - Online search for known solutions
-   - Event log analysis for system errors
+   - Log analysis for system errors
    - PowerShell script execution for system checks
    - Knowledge retrieval for best practices
-3. **Execution**: With your permission, it executes the planned actions
-4. **Observation & Adaptation**: The agent intelligently observes tool results and can dynamically modify its plan based on findings
-5. **Reporting**: Provides a clear summary of findings and recommended solutions
+   - Registry analysis for system settings
+3. **Execution**: With your permission, executes the planned diagnostic actions
+4. **Observation & Adaptation**: Intelligently observes tool results and dynamically modifies plans based on findings
+5. **Reporting**: Provides clear summary of findings and recommended solutions
 
-## Example Tools
+## Available Tools
 
-- `online_search`: Searches the web for solutions to common problems
-- `check_system_updates`: Checks for pending Windows updates
-- `list_log_files`: Lists available system log files
-- `read_event_logs`: Reads Windows event logs for error patterns
-- `write_ps1_file`: Creates PowerShell scripts for system tasks
-- `run_ps1_test`: Executes PowerShell scripts safely
-- `report_result`: Compiles findings into a readable report
+- `online_search`: Search web for solutions to common problems
+- `check_system_updates`: Check for pending Windows updates
+- `list_log_files`: List available system log files
+- `read_event_logs`: Read Windows event logs for error patterns
+- `write_ps1_file`: Create PowerShell scripts for system tasks
+- `run_ps1_test`: Execute PowerShell scripts safely
+- `add_knowledge`: Add new troubleshooting knowledge
+- `search_knowledge`: Search existing knowledge base
+
+## Project Structure
+
+```
+MyAgent_AutoDesktopFixer_SingleAgent_reconV0/
+├── agent/                          # Core agent components
+│   ├── react_agent.py             # Main ReAct framework implementation
+│   ├── memory.py                  # SQLite-based memory system
+│   ├── knowledge_manager.py       # Knowledge base management
+│   ├── tools.py                   # System diagnostic tools
+│   └── tools_ingest_knowledge.py  # Knowledge ingestion tools
+├── utils/                         # Utility modules
+│   └── config_templates.py        # Configuration templates
+├── main.py                        # Entry point - CLI interface
+├── Add_Knowledge_Script.py       # Knowledge base management
+├── requirements.txt              # Python dependencies
+├── agent_memory.db               # Conversation memory (auto-created)
+├── knowledge_db.db               # Knowledge base (auto-created)
+└── .env                          # API configuration (user-created)
+```
 
 ## Development
 
-### Project Structure
-
-```
-├── agent/
-│   ├── react_agent.py    # Main agent logic using ReAct framework
-│   ├── memory.py         # SQLite-based memory system
-│   └── tools.py          # System tools implementation
-├── main.py              # Entry point with CLI interface
-├── requirements.txt     # Python dependencies
-└── .env                 # API configuration (not included in repo)
-```
-
 ### Key Components
 
-1. **ReAct Agent**: Implements the Reasoning-action framework for problem-solving
-2. **SQLite Memory**: Stores conversation history and learned patterns
-3. **Rich UI**: Provides an intuitive command-line interface with visual feedback
-4. **Tool System**: Extensible collection of system utilities for diagnostics
+- **ReAct Agent**: Implements Reasoning-Action framework for intelligent problem-solving
+- **SQLite Memory**: Persistent conversation and learning history
+- **Rich UI**: Beautiful command-line interface with visual feedback
+- **Tool System**: Extensible architecture for adding new diagnostic capabilities
+- **Knowledge Base**: Vector-based storage for troubleshooting information
 
 ## Security Notes
 
+⚠️ **Important Safety Considerations:**
 - The agent can execute PowerShell scripts on your system
-- Always review the proposed plan before confirming execution
-- The agent only executes actions with your explicit confirmation
+- Always review proposed plans before confirming execution
+- The agent requires explicit user confirmation for all actions
+- Run in a development environment first to understand behavior
+- Consider the potential impact of diagnostic commands on production systems
+
+## Troubleshooting
+
+**Common Issues:**
+
+1. **Import errors**: Ensure all dependencies are installed correctly
+2. **API connection issues**: Verify your API key and endpoint configuration
+3. **Permission errors**: Run PowerShell as Administrator for full system access
+4. **Memory database errors**: Delete `agent_memory.db` and `knowledge_db.db` to reset
 
 ## Contributing
 
-Contributions are welcome! Feel free to submit issues or pull requests for:
+Contributions are welcome! Areas for improvement:
 
-- New diagnostic tools
-- Improved troubleshooting workflows
-- Better UI/UX enhancements
-- Additional LLM integrations
+- **New diagnostic tools** for Windows-specific issues
+- **Enhanced troubleshooting workflows**
+- **Better UI/UX improvements**
+- **Additional LLM provider integrations**
+- **Knowledge base expansion**
+- **Performance optimizations**
+
+Please submit issues or pull requests with detailed descriptions.
 
 ## License
 
@@ -128,6 +219,12 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 
 ## Acknowledgments
 
-- Built with LangChain for LLM integration
-- Uses Rich for the command-line interface
-- Inspired by ReAct (Reasoning-action) AI frameworks
+- Built with [LangChain](https://langchain.com) for LLM integration
+- Uses [Rich](https://rich.readthedocs.io) for beautiful command-line interface
+- Inspired by [ReAct](https://react-lm.github.io) AI frameworks
+- Knowledge management powered by vector similarity search
+
+---
+
+**Ready to troubleshoot your Windows issues?** 
+Start with `python main.py` and let the AI agent guide you to a solution!

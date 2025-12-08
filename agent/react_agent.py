@@ -51,7 +51,7 @@ class ReactAgent:
             base_url=api_base,
             model=openai_model,
             openai_api_key=openai_api_key,
-            temperature=0.7
+            temperature=0.3
         )
         self.graph = self._build_graph()
         
@@ -184,7 +184,7 @@ class ReactAgent:
         3. The params parameter must contain the correct parameters for the selected tool.
         4. Each task must have a clear description.
         5. The plan must be executable using the available tools.
-        6. Always try to search for relevant information before executing any scripts.
+        6. Always use knowledge_retrieval tool to search from internal knowledge base as Task 1 and use online_search tool to search from Internet for relevant information as Task 2!!!
         """)
         
         if state.get("plan"):
@@ -198,7 +198,7 @@ class ReactAgent:
                 "format_instructions": parser.get_format_instructions(),
                 "tool_descriptions": tool_descriptions
             })
-            print(f"Generated plan: {plan}")  # Debug print
+            #print(f"Generated plan: {plan}")  # Debug print
             
             # Ensure all tasks have a status (double check)
             if "tasks" in plan:
@@ -218,7 +218,7 @@ class ReactAgent:
                     {
                         "task_id": "task_1",
                         "description": "Search for information about the issue",
-                        "tool": "online_search",
+                        "tool": "knowledge_retrieval",
                         "status": "pending",
                         "params": {"query": state["user_query"]}
                     }
@@ -239,7 +239,7 @@ class ReactAgent:
         """Get human confirmation before executing the plan or a tool."""
         # This method will be called by the workflow, but the actual UI interaction
         # will happen in the main loop. For now, we'll just pass through the state.
-        print("Getting human confirmation...")
+        #print("Getting human confirmation...")
         
         # If there's already pending_tool_execution in state, use it directly
         pending_execution = state.get("pending_tool_execution")
@@ -304,7 +304,7 @@ class ReactAgent:
         for task in tasks:
             if task.get("status") != "completed":
                 current_task = task
-                print(f"Executing task: {current_task}")  # Debug print
+                #print(f"Executing task: {current_task}")  # Debug print
                 break
         
         if not current_task:
@@ -337,8 +337,6 @@ class ReactAgent:
                     "plan_id": state["plan_id"]
                 }
             else:
-                # For certain tools, we might need human confirmation
-                # For now, we'll set up pending execution for UI confirmation
                 pending_execution = {
                     "tool_name": tool_name,
                     "params": params,
@@ -381,24 +379,24 @@ class ReactAgent:
         
         confirm = Prompt.ask(f"[bold yellow]Are you sure you want to execute tool: {tool_name} with params: {params}? (yes/no)[/bold yellow]")
         if confirm.lower() != "yes":
-            console.print("[bold red]Tool execution cancelled by user[/bold red]")
+            self.console.print("[bold red]Tool execution cancelled by user[/bold red]")
             exit(0)
-            #return state
+            #TODO: Remove current task and pending_execution then modify the plan
+            
         # Get the tool instance
         tool = tools.get(tool_name)
         if not tool:
             tool_result = f"Error: Tool '{tool_name}' not found"
         else:
             # Execute the tool
-            self.console.print(f"Executing tool: {tool_name} with params: {params}")  # Debug print
+            #self.console.print(f"Executing tool: {tool_name} with params: {params}")  # Debug print
             try:
                 tool_result = tool(**params)
             except Exception as e:
                 tool_result = f"Error executing tool '{tool_name}': {str(e)}"
-        
-        # Clear pending execution and return result
-        
+
         # Mark task as completed immediately after execution
+        self.console.print(f"[bold green]Pending execution task: {pending_execution.get('task', {}).get('description', 'Unknown task')}[/bold green]")
         if pending_execution.get("task"):
             task_id = pending_execution["task"]["task_id"]
             for task in state["plan"].get("tasks", []):
@@ -478,14 +476,15 @@ class ReactAgent:
             Always prioritize making forward progress and avoiding repetition.
 
             REMEMBER: 
-            1.NO DUPLICATE TASKS IN THE PLAN!
-            2.All tasks in the plan should be executable by the available tools.
-            3.If a task is not executable, remove it from the plan!
+            1.NO DUPLICATE TASKS IN THE PLAN, DO NOT ADD ANY TASK WITH SAME TOOL AND PARAMS AS THE EXISTING TASKS IN THE PLAN!!!
+            2.All tasks in the plan should be executable by the available tools!!!
+            3.If a task is not executable, remove it from the plan!!!
             4.DO NOT REMOVE OR MODIFY THE CURRENT TASK FROM THE PLAN!!!
             5.DO NOT REMOVE OR MODIFY THE TASKS THAT ARE COMPLETED!!!
             6.DO NOT MODIFY THE RESULT AND REASON FOR THE TASKS THAT ARE NOT COMPLETED YET!!! 
             7.All plan modifications must be added to "modifications" list!!!
-            8.Respond with a JSON object containing:
+            8.Only modify the plan when necessary, do not modify the plan if no changes are needed!!!
+            9.Respond with a JSON object containing:
             {{
                 "success": true/false,
                 "analysis": "Brief analysis of the result, do not contain any plan modifications.",
@@ -547,7 +546,7 @@ class ReactAgent:
                 
                 # Step 4: Try to parse the cleaned JSON
                 analysis_json = json.loads(plan_str)
-                self.console.print(analysis_json)
+                #self.console.print(analysis_json)
                 observation["success"] = analysis_json.get("success", False)
                 observation["llm_analysis"] = analysis_json.get("analysis", "")
                 observation["should_modify_plan"] = analysis_json.get("should_modify_plan", False)
@@ -598,7 +597,7 @@ class ReactAgent:
             #self.ui.display_observation(observation)
             self.ui.display_plan_modifications(observation)
 
-        self._print_agent_context(state)
+        #self._print_agent_context(state)
         
         return {
             "user_query": state["user_query"],
@@ -613,8 +612,6 @@ class ReactAgent:
 
     def _modify_plan(self, state: AgentState) -> Dict:
         """Modify the plan based on the tool result and LLM analysis."""
-        # Note: Task status is already marked as completed in _execute_confirmed_tool
-        
         # Update the executed task with detailed result and reason from observation
         current_task_in_state = state.get("current_task")
         observation = state.get("observation", {})
@@ -681,7 +678,7 @@ class ReactAgent:
                     
                     plan_tasks.append(new_task)
                     self.console.print(f"[bold yellow]Added new task: {new_task.get('description', 'N/A')} - Reason: {reason}[/bold yellow]")
-                    
+                     
                 elif mod_type == "remove" and task_id:
                     # Remove task
                     plan_tasks = [task for task in plan_tasks if task.get("task_id") != task_id]
@@ -703,7 +700,6 @@ class ReactAgent:
                                 if "query" not in task["params"]:
                                     task["params"]["query"] = state.get("user_query", "")
 
-                            # 如果有 new_task，则修改当前 task_id 对应的 description、tool、params，并将 status 设为 pending
                             if "new_task" in modification:
                                 new_task_data = modification["new_task"]
                                 
@@ -713,7 +709,7 @@ class ReactAgent:
                                     task["tool"] = new_task_data["tool"]
                                 if "params" in new_task_data:
                                     task["params"] = new_task_data["params"]
-                                task["status"] = "pending"  # 重置状态为 pending
+                                task["status"] = "pending"
                             
                             self.console.print(f"[bold yellow]Modified task {task_id} - Reason: {reason}[/bold yellow]")
                             break
@@ -723,7 +719,7 @@ class ReactAgent:
         
         # Save updated plan to memory
         self.memory.save_plan(state["plan_id"], state["user_query"], state["plan"])
-        
+        self._print_agent_context(state)
         # Show current plan as a table.
         self.console.print("\n[bold yellow]Current Troubleshooting Plan:[/bold yellow]")
         table = Table(show_header=True, header_style="bold magenta", expand=False)
@@ -779,7 +775,7 @@ class ReactAgent:
         """Route after human confirmation based on whether to execute the tool or cancel."""
         # In a real implementation, this would check the user's confirmation decision
         # For now, we'll simulate user approval
-        print("Routing after human confirmation...")
+        #print("Routing after human confirmation...")
         return "execute_tool"
     
     def _should_continue(self, state: AgentState) -> str:
@@ -787,8 +783,8 @@ class ReactAgent:
         # Check if all tasks are completed
         #tasks = state["plan"].get("tasks", [])
         #all_completed = all(task.get("status") == "completed" for task in tasks)
-        print("Checking completion status with current plan...")
-        print(state["plan"])
+        #print("Checking completion status with current plan...")
+        #print(state["plan"])
         continue_prompt = ChatPromptTemplate.from_template("""
         You are an AI assistant helping to troubleshoot a user query.
         The current plan which was modified is: {plan}
@@ -807,33 +803,66 @@ class ReactAgent:
             "tool_result": state.get("tool_result"),
             "observation": state.get("observation")
         })
-        self.console.print("Continue Decision:", continue_decision)
+        #self.console.print("Continue Decision:", continue_decision)
 
         return "complete" if continue_decision.lower() == "no" else "continue"
     
     def _report_result(self, state: AgentState) -> Dict:
         """Report the final troubleshooting result."""
-        # Generate summary
-        summary = f"Troubleshooting completed for: {state['user_query']}\n\n"
-        summary += "Tasks completed:\n"
-        for task in state["plan"].get("tasks", []):
-            summary += f"- {task['description']}: {task.get('status', 'pending')}\n"
+        # Generate summary by LLM
+        summary_prompt = ChatPromptTemplate.from_template("""
+        You are an AI assistant helping to troubleshoot a user query.
+        The current plan which was modified is: {plan}
+        The user query is: {user_query}
+        The previous tool result is: {tool_result}
+        The observation is: {observation}
+        The troubleshooting process is completed.
+        Now generate a summary of the troubleshooting process, including tasks completed, tools used, and any observations, and the next steps if any.
+        """)
+        chain = summary_prompt | self.llm | StrOutputParser()
+        summary = chain.invoke({
+            "plan": state["plan"],
+            "user_query": state["user_query"],
+            "tool_result": state.get("tool_result"),
+            "observation": state.get("observation")
+        })
         
-        # Use report_result tool
-        report_tool = tools.get("report_result")
-        result = report_tool(summary=summary, result="Troubleshooting process completed.")
+        self.console.clear()
+        result_panel = Panel(
+            "Troubleshooting completed!\n\n"+
+            "Overall summary:\n"+
+            summary+"\n\n",
+            title="[bold green]Troubleshooting result[/bold green]",
+            border_style="green",
+            expand=False
+        )
+        self.console.print(result_panel)
         
         return {
             "user_query": state["user_query"],
             "plan": state["plan"],
             "current_task": state.get("current_task"),
-            "tool_result": result,
+            "tool_result": state.get("tool_result"),
+            "observation": state.get("observation"),
             "conversation_history": state["conversation_history"],
             "plan_id": state["plan_id"]
         }
     
-    def generate_plan(self, user_query: str) -> Dict[str, Any]:
+    def detect_and_generate_plan(self, user_query: str) -> Dict[str, Any]:
         """Generate a troubleshooting plan without executing it."""
+        #Detect if a user query is a troubleshooting request or not.
+        #If not, exit the program
+        Prompt = ChatPromptTemplate.from_template("""
+        You are an AI assistant helping to troubleshoot a user query.
+        The user query is: {user_query}
+        Is the user query a troubleshooting request? (ONLY REPLY yes/no)!
+        """)
+        chain = Prompt | self.llm | StrOutputParser()
+        is_troubleshooting_request = chain.invoke({"user_query": user_query})
+        if is_troubleshooting_request.lower() != "yes":
+            self.console.print("[bold red]Error: This is a desktop issue troubleshooting assistant, please raise questions about desktop issues only![/bold red]")
+            exit(1)
+
         import uuid
         plan_id = str(uuid.uuid4())
         
@@ -890,7 +919,6 @@ class ReactAgent:
                 self.console.print(f"  - {task.get('task_id')}: {status} - {task.get('description')[:50]}...")
 
         if state.get('conversation_history'):
-            # 格式化显示对话历史
             conversation_history = state.get("conversation_history", [])
             if conversation_history:
                 self.console.print("\n[bold]Conversation history:[/bold]")

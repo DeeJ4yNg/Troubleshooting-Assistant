@@ -141,32 +141,24 @@ class KnowledgeRetrievalTool:
     description = "Retrieve knowledge from the knowledge base using hybrid search (BM25 + ANN). Example: {{'query': 'Windows Settings app repair methods', 'limit': 5}} to retrieve relevant information."
     
     def __init__(self):
-        """初始化知识库检索工具。"""
+        """init knowledge retrieval tool"""
         try:
-            # 使用KnowledgeManager代替SQLiteMemory
             self.knowledge_manager = KnowledgeManager()
-            # 尝试导入嵌入模型
             self.embedding_model = self._init_embedding_model()
             logger.info("KnowledgeRetrievalTool initialized successfully")
         except Exception as e:
             logger.error(f"Failed to initialize KnowledgeRetrievalTool: {e}")
-            # 创建一个简单的备份实现，只支持关键词搜索
             self.knowledge_manager = None
     
     def _init_embedding_model(self) -> Optional[Any]:
-        """初始化嵌入模型"""
+        """init embedding model"""
         try:
-            # 尝试导入OpenAI模型（如果可用）
             try:
                 import openai
-                # 检查API密钥
                 if os.environ.get("OPENAI_API_KEY"):
                     return "openai"
             except ImportError:
                 pass
-            
-            # 尝试导入其他嵌入模型库
-            # 这里可以添加其他嵌入模型的支持
             
             return None
         except Exception:
@@ -175,56 +167,46 @@ class KnowledgeRetrievalTool:
     def _generate_embedding(self, text: str) -> Optional[List[float]]:
         """生成文本的嵌入向量"""
         try:
-            if self.embedding_model == "openai":
-                import openai
-                response = openai.Embedding.create(
-                    input=text,
-                    model="text-embedding-ada-002"
-                )
-                return response['data'][0]['embedding']
-            
-            # 如果没有嵌入模型，返回默认向量
-            # 注意：在实际应用中，应该使用适当的嵌入模型
-            # 这里仅作为占位符
-            return [0.0] * 1536
+            from langchain.embeddings import OpenAIEmbeddings
+            embeddings = OpenAIEmbeddings(
+                openai_api_key=os.getenv("OPENAI_API_KEY"),
+                model=os.getenv("OPENAI_EMBEDDING_MODEL"),
+                base_url=os.getenv("OPENAI_API_BASE")
+            )
+            return embeddings.embed_query(text)
         except Exception as e:
             logger.error(f"Failed to generate embedding: {e}")
-            return [0.0] * 1536
+            return None
     
     def __call__(self, query: str, limit: int = 5, alpha: float = 0.5) -> List[Dict[str, Any]]:
-        """使用混合搜索检索知识
+        """Use Hybrid search to retrieve knowledge
         
         Args:
-            query: 查询文本
-            limit: 返回结果数量限制
-            alpha: 向量搜索权重 (0-1)，BM25权重为1-alpha
+            query: query text
+            limit: number of results
+            alpha: vector search weight (0-1), BM25 weight is 1-alpha
             
         Returns:
-            搜索结果列表
+            search results list
         """
-        # 验证输入参数
+
         if not query or not isinstance(query, str):
             logger.error("Invalid query parameter")
             return []
         
-        # 确保limit是有效的正整数
         limit = max(1, min(100, int(limit)))
         
-        # 确保alpha在有效范围内
         alpha = max(0.0, min(1.0, float(alpha)))
         
         try:
-            # 检查knowledge_manager是否初始化成功
             if self.knowledge_manager is None:
                 logger.error("Knowledge manager is not initialized")
                 return []
             
-            # 尝试执行混合搜索，但考虑到可能的错误
-            try:
-                # 生成查询嵌入向量
+            try: 
                 query_embedding = self._generate_embedding(query)
                 
-                # 执行混合搜索
+                # Hybrid search
                 results = self.knowledge_manager.hybrid_search(
                     query=query,
                     query_embedding=query_embedding,
@@ -232,7 +214,7 @@ class KnowledgeRetrievalTool:
                     alpha=alpha
                 )
                 
-                # 格式化结果
+                # formatted result
                 formatted_results = []
                 for result in results:
                     formatted_results.append({
@@ -247,14 +229,14 @@ class KnowledgeRetrievalTool:
             except Exception as hybrid_error:
                 logger.warning(f"Hybrid search failed, falling back to BM25: {hybrid_error}")
                 
-                # 如果混合搜索失败，回退到BM25搜索
+                # If hybrid search failed, return to BM25
                 try:
-                    # 尝试使用BM25搜索
+                    # try BM25
                     bm25_results = self.knowledge_manager.search_bm25(query, limit)
-                    # 获取详细信息
+                    # get details
                     detailed_results = []
                     for doc_id, score in bm25_results:
-                        # 查询详细信息
+                        # Check details
                         try:
                             knowledge_item = self.knowledge_manager.get_knowledge_by_id(doc_id)
                             if knowledge_item:
@@ -274,10 +256,8 @@ class KnowledgeRetrievalTool:
                 except Exception as bm25_error:
                     logger.warning(f"BM25 search failed, falling back to simple search: {bm25_error}")
                     
-                    # 最后回退到简单的SQL查询
                     try:
                         import sqlite3
-                        # 假设KnowledgeManager有一个db_path属性
                         db_path = getattr(self.knowledge_manager, 'db_path', ':memory:')
                         conn = sqlite3.connect(db_path)
                         cursor = conn.cursor()
@@ -514,8 +494,8 @@ read_error_logs_tool = ReadErrorLogsTool()
 write_ps1_file_tool = WritePS1FileTool()
 run_ps1_test_tool = RunPS1TestTool()
 online_search_tool = OnlineSearchTool()
-knowledge_retrieval_tool = KnowledgeRetrievalTool()  # 不再需要传入memory参数
-report_result_tool = ReportResultTool()
+knowledge_retrieval_tool = KnowledgeRetrievalTool()
+#report_result_tool = ReportResultTool()
 check_registry_key_tool = CheckRegistryKeyTool()
 modify_registry_key_tool = ModifyRegistryKeyTool()
 run_cmd_command_tool = RunCmdCommandTool()
@@ -527,7 +507,7 @@ tools = {
     "run_ps1_test": run_ps1_test_tool,
     "online_search": online_search_tool,
     "knowledge_retrieval": knowledge_retrieval_tool,
-    "report_result": report_result_tool,
+    #"report_result": report_result_tool,
     "check_registry_key": check_registry_key_tool,
     "modify_registry_key": modify_registry_key_tool,
     "run_cmd_command": run_cmd_command_tool

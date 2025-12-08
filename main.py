@@ -21,9 +21,10 @@ class WindowsTroubleshootingUI:
         """Display welcome message."""
         self.console.clear()
         welcome_panel = Panel(
-            "# Windows OS Troubleshooting Agent\n\n"+
+            "Windows OS Troubleshooting Agent\n\n"+
             "I can help you troubleshoot Windows OS issues. "+
-            "Please describe your problem below.",
+            "Please describe your problem below.\n\n"+
+            "Type 'quit' or 'exit' to end the session.\n",
             title="[bold green]Welcome[/bold green]",
             border_style="green",
             expand=False
@@ -44,8 +45,10 @@ class WindowsTroubleshootingUI:
         table.add_column("Description")
         table.add_column("Tool")
         table.add_column("Params", style="dim")
+        table.add_column("Status", style="dim")
+        table.add_column("Result", style="dim")
+        table.add_column("Reason", style="dim")
         
-        # 确保plan是字典且包含tasks键
         if not isinstance(plan, dict):
             self.console.print("[bold red]Error: Invalid plan format![/bold red]")
             return
@@ -58,19 +61,20 @@ class WindowsTroubleshootingUI:
         self.console.print(f"Found {len(tasks)} tasks in the plan.")
         
         for task in tasks:
-            # 简化params显示，避免复杂的多行JSON
             params = task.get("params", {})
             if isinstance(params, dict) and params:
                 params_str = ", ".join([f"{k}={v}" for k, v in params.items()])
             else:
                 params_str = "{}"
                 
-            # 确保所有字段都有默认值
             table.add_row(
                 task.get("task_id", "N/A"),
                 task.get("description", "N/A"),
                 task.get("tool", "N/A"),
-                params_str[:50] + "..." if len(params_str) > 50 else params_str
+                params_str[:50] + "..." if len(params_str) > 50 else params_str,
+                task.get("status", "N/A"),
+                task.get("result", "N/A"),
+                task.get("reason", "N/A")
             )
         
         self.console.print(table)
@@ -193,6 +197,7 @@ class WindowsTroubleshootingUI:
         self.console.print("\n" + "="*80)
         self.console.print(Markdown(result))
         self.console.print("="*80)
+        self.console.print("\n[bold green]Troubleshooting completed, please try again and see if the issue is resolved.[/bold green]")
     
     def run(self):
         """Run the troubleshooting UI loop."""
@@ -201,12 +206,12 @@ class WindowsTroubleshootingUI:
         while True:
             user_query = self.get_user_query()
             if not user_query or user_query.lower() in ["exit", "quit", "q"]:
-                self.console.print("\n[bold green]Thank you for using the Windows OS Troubleshooting Agent![/bold green]")
+                self.console.print("\n[bold green]Good bye!\n\nThank you for using the Windows OS Troubleshooting Agent!\n\n[/bold green]")
                 break
             
             # Generate plan
             with self.console.status("[bold green]Generating plan...[/bold green]") as status:
-                plan_result = self.agent.generate_plan(user_query)
+                plan_result = self.agent.detect_and_generate_plan(user_query)
             
             # Display plan and get confirmation
             self.display_plan(plan_result["plan"])
@@ -248,35 +253,35 @@ class WindowsTroubleshootingUI:
                 current_state = self.agent.graph.invoke(current_state, config=config)
                 
                 # Check if there's a pending tool execution that needs user confirmation
-                if current_state.get("pending_tool_execution"):
+                #if current_state.get("pending_tool_execution"):
                     # User confirmation is now handled inside the agent's _execute_confirmed_tool function
                     # We don't need to do anything here except continue the loop
-                    continue
+                    #continue
                 
                 # Check if the troubleshooting process is complete
-                if current_state.get("tool_result") and "Troubleshooting process completed" in str(current_state.get("tool_result", "")):
-                    break
+                #if current_state.get("tool_result") and "Troubleshooting process completed" in str(current_state.get("tool_result", "")):
+                    #break
             
             # Display observations from memory
-            if plan_id:
-                observations = self.memory.get_observations_for_plan(plan_id)
-                for obs in observations:
+            #if plan_id:
+                #observations = self.memory.get_observations_for_plan(plan_id)
+                #for obs in observations:
                     # Create an observation dict similar to what the agent produces
-                    observation_dict = {
-                        "observation": obs["observation"],
-                        "success": obs["success"],
-                        "details": obs["details"],
-                        "llm_analysis": obs["llm_analysis"],
-                        "should_modify_plan": obs["should_modify_plan"],
-                        "plan_modifications": obs["plan_modifications"]
-                    }
+                    #observation_dict = {
+                        #"observation": obs["observation"],
+                        #"success": obs["success"],
+                        #"details": obs["details"],
+                        #"llm_analysis": obs["llm_analysis"],
+                        #"should_modify_plan": obs["should_modify_plan"],
+                        #"plan_modifications": obs["plan_modifications"]
+                    #}
                     
-                    self.console.print(f"\n[bold purple]Observation for Task {obs['task_id']}:[/bold purple]")
-                    self.display_observation(observation_dict)
-                    self.display_plan_modifications(observation_dict)
+                    #self.console.print(f"\n[bold purple]Observation for Task {obs['task_id']}:[/bold purple]")
+                    #self.display_observation(observation_dict)
+                    #self.display_plan_modifications(observation_dict)
             
             # Display final result
-            self.display_final_result(current_state["tool_result"])
+            self.display_final_result(current_state["Plan"])
             
             # Ask if user wants to troubleshoot another issue
             self.console.print()

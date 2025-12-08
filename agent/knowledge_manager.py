@@ -21,20 +21,30 @@ except ImportError:
     FAISS_AVAILABLE = False
     print("Warning: faiss not available. Using linear search as fallback.")
 
+import os
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv()
+
 # 设置当前使用的ANN算法
 ANN_ENGINE = "faiss" if FAISS_AVAILABLE else "linear"
 
 class KnowledgeManager:
-    def __init__(self, db_path="knowledge_db.db", embedding_dim=1536, preferred_ann_engine=None):
+    def __init__(self, db_path="knowledge_db.db", embedding_dim=None, preferred_ann_engine=None):
         """初始化知识库管理器
         
         Args:
             db_path: 数据库文件路径
-            embedding_dim: 嵌入向量维度（默认1536，适合OpenAI等模型）
+            embedding_dim: 嵌入向量维度（默认从环境变量读取，或为1536）
             preferred_ann_engine: 已弃用，保留是为了兼容性
         """
         self.db_path = db_path
-        self.embedding_dim = embedding_dim
+        if embedding_dim is None:
+            self.embedding_dim = int(os.getenv("EMBEDDING_DIM", 1536))
+        else:
+            self.embedding_dim = embedding_dim
+            
         self._init_db()
         
         # 初始化ANN索引
@@ -233,6 +243,12 @@ class KnowledgeManager:
                 for i, (item_id, embedding_blob) in enumerate(results):
                     if embedding_blob:
                         embedding = np.frombuffer(embedding_blob, dtype=np.float32)
+                        
+                        # Check dimension
+                        if len(embedding) != self.embedding_dim:
+                            print(f"Warning: Skipping item {item_id} with embedding dimension {len(embedding)} (expected {self.embedding_dim})")
+                            continue
+
                         embeddings.append(embedding)
                         # FAISS uses integer IDs starting from 0 (if using add)
                         # or we can use IndexIDMap to supply custom IDs, but let's stick to simple map
@@ -251,6 +267,12 @@ class KnowledgeManager:
                 for item_id, embedding_blob in results:
                     if embedding_blob:
                         embedding = np.frombuffer(embedding_blob, dtype=np.float32)
+                        
+                        # Check dimension
+                        if len(embedding) != self.embedding_dim:
+                            print(f"Warning: Skipping item {item_id} with embedding dimension {len(embedding)} (expected {self.embedding_dim})")
+                            continue
+
                         self.linear_embeddings.append(embedding)
                         self.linear_ids.append(item_id)
                 
