@@ -18,6 +18,7 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.prompt import Prompt
 from rich.table import Table
+from utils.logger import setup_logger
 
 # Load environment variables
 load_dotenv()
@@ -36,6 +37,7 @@ class AgentState(TypedDict):
 
 class ReactAgent:
     def __init__(self, memory: SQLiteMemory, ui=None):
+        self.logger = setup_logger(name="ReactAgent")
         self.memory = memory
         # Initialize OpenAI LLM with API key from environment variables
         openai_api_key = os.getenv("OPENAI_API_KEY")
@@ -51,7 +53,7 @@ class ReactAgent:
             base_url=api_base,
             model=openai_model,
             openai_api_key=openai_api_key,
-            temperature=0.3
+            temperature=0.2
         )
         self.graph = self._build_graph()
         
@@ -153,8 +155,8 @@ class ReactAgent:
             tool: str = Field(description="The appropriate tool to use")
             params: Dict[str, Any] = Field(description="Proper parameters for the tool")
             status: str = Field(description="Initial status of the task", default="pending")
-            result: Optional[str] = Field(description="Result of the task execution (success/failure)", default=None)
-            reason: Optional[str] = Field(description="Reason for the result or status", default=None)
+            result: Optional[str] = Field(description="Result of the task execution (success/failure)", default="N/A")
+            reason: Optional[str] = Field(description="Reason for the result or status", default="N/A")
 
         class Plan(BaseModel):
             tasks: List[Task] = Field(description="List of troubleshooting tasks")
@@ -184,7 +186,8 @@ class ReactAgent:
         3. The params parameter must contain the correct parameters for the selected tool.
         4. Each task must have a clear description.
         5. The plan must be executable using the available tools.
-        6. Always use knowledge_retrieval tool to search from internal knowledge base as Task 1 and use online_search tool to search from Internet for relevant information as Task 2!!!
+        6. Avoid any dangerous actions that could cause system restart/shutdown/damage/data loss.
+        7. Always use knowledge_retrieval tool to search from internal knowledge base as Task 1 and use online_search tool to search from Internet for relevant information as Task 2!!!
         """)
         
         if state.get("plan"):
@@ -193,12 +196,12 @@ class ReactAgent:
         chain = prompt | self.llm | parser
         
         try:
+            self.logger.info(f"Creating plan for user query: {state['user_query']}")
             plan = chain.invoke({
                 "user_query": state["user_query"],
                 "format_instructions": parser.get_format_instructions(),
                 "tool_descriptions": tool_descriptions
             })
-            #print(f"Generated plan: {plan}")  # Debug print
             
             # Ensure all tasks have a status (double check)
             if "tasks" in plan:
@@ -209,9 +212,11 @@ class ReactAgent:
                         task["result"] = "N/A"
                     if "reason" not in task:
                         task["reason"] = "N/A"
+
+            self.logger.info(f"Generated plan: {plan}")
             
         except Exception as e:
-            print(f"Error generating plan: {e}")
+            self.logger.error(f"Error generating plan: {e}")
             # Fallback plan
             plan = {
                 "tasks": [
@@ -304,7 +309,7 @@ class ReactAgent:
         for task in tasks:
             if task.get("status") != "completed":
                 current_task = task
-                #print(f"Executing task: {current_task}")  # Debug print
+                self.logger.info(f"Executing task: {current_task.get('task_id')} - {current_task.get('description')}")
                 break
         
         if not current_task:
@@ -380,6 +385,7 @@ class ReactAgent:
         confirm = Prompt.ask(f"[bold yellow]Are you sure you want to execute tool: {tool_name} with params: {params}? (yes/no)[/bold yellow]")
         if confirm.lower() != "yes":
             self.console.print("[bold red]Tool execution cancelled by user[/bold red]")
+            self.logger.warning(f"Tool execution cancelled by user: {tool_name} with params: {params}")
             exit(0)
             #TODO: Remove current task and pending_execution then modify the plan
             
@@ -389,14 +395,16 @@ class ReactAgent:
             tool_result = f"Error: Tool '{tool_name}' not found"
         else:
             # Execute the tool
-            #self.console.print(f"Executing tool: {tool_name} with params: {params}")  # Debug print
+            self.logger.info(f"Executing tool: {tool_name} with params: {params}")
             try:
                 tool_result = tool(**params)
+                self.logger.info(f"Tool execution successful. Result length: {len(str(tool_result))}")
             except Exception as e:
+                self.logger.error(f"Error executing tool '{tool_name}': {str(e)}")
                 tool_result = f"Error executing tool '{tool_name}': {str(e)}"
 
         # Mark task as completed immediately after execution
-        self.console.print(f"[bold green]Pending execution task: {pending_execution.get('task', {}).get('description', 'Unknown task')}[/bold green]")
+        #self.console.print(f"[bold green]Pending execution task: {pending_execution.get('task', {}).get('description', 'Unknown task')}[/bold green]")
         if pending_execution.get("task"):
             task_id = pending_execution["task"]["task_id"]
             for task in state["plan"].get("tasks", []):
@@ -419,6 +427,10 @@ class ReactAgent:
         tool_result = state.get("tool_result")
         current_task = state.get("current_task") or {}
         task_description = current_task.get("description", "Unknown task")
+        
+        self.logger.info(f"Observing result for task: {task_description}")
+        self.logger.info(f"Tool result length: {len(str(tool_result))}")
+        
         observation = {
             "success": False,
             #"details": "",
@@ -484,7 +496,9 @@ class ReactAgent:
             6.DO NOT MODIFY THE RESULT AND REASON FOR THE TASKS THAT ARE NOT COMPLETED YET!!! 
             7.All plan modifications must be added to "modifications" list!!!
             8.Only modify the plan when necessary, do not modify the plan if no changes are needed!!!
-            9.Respond with a JSON object containing:
+            9.ONLY ADD NEW TASK WHEN NECESSARY, DO NOT ADD TASK THAT IS ALREADY IN THE PLAN!!!
+            10.Avoid any restart or shutdown actions in the plan!!!
+            11.Respond with a JSON object containing:
             {{
                 "success": true/false,
                 "analysis": "Brief analysis of the result, do not contain any plan modifications.",
@@ -551,7 +565,9 @@ class ReactAgent:
                 observation["llm_analysis"] = analysis_json.get("analysis", "")
                 observation["should_modify_plan"] = analysis_json.get("should_modify_plan", False)
                 observation["plan_modifications"] = analysis_json.get("modifications", [])
+                self.logger.info("Successfully parsed LLM analysis.")
             except json.JSONDecodeError as e:
+                self.logger.error(f"JSON parsing failed for analysis result: {e}")
                 self.console.print(f"JSON parsing failed for analysis result: {e}")
                 self.console.print(f"Attempted to parse: {plan_str}")
                 # If JSON parsing fails, treat as plain text analysis
@@ -560,6 +576,7 @@ class ReactAgent:
                 observation["plan_modifications"] = []
                 
         except Exception as e:
+            self.logger.error(f"Error in _observe_result: {e}")
             # If LLM analysis fails, continue with basic observation
             observation["llm_analysis"] = f"LLM analysis failed: {str(e)}"
             observation["should_modify_plan"] = False
@@ -593,9 +610,9 @@ class ReactAgent:
         })
         
         # Display observation if UI is available
-        if self.ui:
+        #if self.ui:
             #self.ui.display_observation(observation)
-            self.ui.display_plan_modifications(observation)
+            #self.ui.display_plan_modifications(observation)
 
         #self._print_agent_context(state)
         
@@ -612,6 +629,7 @@ class ReactAgent:
 
     def _modify_plan(self, state: AgentState) -> Dict:
         """Modify the plan based on the tool result and LLM analysis."""
+        self.logger.info("Modifying plan based on observation...")
         # Update the executed task with detailed result and reason from observation
         current_task_in_state = state.get("current_task")
         observation = state.get("observation", {})
@@ -652,6 +670,11 @@ class ReactAgent:
                     # Detect if the new task is a duplicated one, if yes, skip it.
                     if any(task.get("task_id") == new_task.get("task_id") for task in plan_tasks):
                         self.console.print(f"[bold yellow]Duplicated task {new_task.get('task_id', 'N/A')}. Task: {new_task.get('description', 'N/A')} - Reason: {reason}[/bold yellow]")
+                        continue
+
+                    # Detect if tool is in available tool list, if not, continue.
+                    if new_task.get("tool") not in ["list_log_files","read_error_logs","write_ps1_file","run_ps1_test","online_search","knowledge_retrieval","check_registry_key","modify_registry_key","run_cmd_command"]:
+                        self.console.print(f"[bold yellow]Tool {new_task.get('tool', 'N/A')} is not available. Task: {new_task.get('description', 'N/A')} - Reason: {reason}[/bold yellow]")
                         continue
 
                     # Ensure the new task has all required fields
@@ -719,7 +742,7 @@ class ReactAgent:
         
         # Save updated plan to memory
         self.memory.save_plan(state["plan_id"], state["user_query"], state["plan"])
-        self._print_agent_context(state)
+        #self._print_agent_context(state)
         # Show current plan as a table.
         self.console.print("\n[bold yellow]Current Troubleshooting Plan:[/bold yellow]")
         table = Table(show_header=True, header_style="bold magenta", expand=False)
@@ -781,8 +804,15 @@ class ReactAgent:
     def _should_continue(self, state: AgentState) -> str:
         """Determine if the agent should continue or complete the troubleshooting process."""
         # Check if all tasks are completed
-        #tasks = state["plan"].get("tasks", [])
-        #all_completed = all(task.get("status") == "completed" for task in tasks)
+        tasks = state["plan"].get("tasks", [])
+        all_completed = all(task.get("status") == "completed" for task in tasks)
+        if not all_completed:
+            return "continue"
+
+        # Check if the length of task is larger than 10, if so, complete the troubleshooting process
+        if len(tasks) > 10:
+            return "complete"
+        
         #print("Checking completion status with current plan...")
         #print(state["plan"])
         continue_prompt = ChatPromptTemplate.from_template("""
@@ -791,7 +821,6 @@ class ReactAgent:
         The user query is: {user_query}
         The previous tool result is: {tool_result}
         The observation is: {observation}
-        DO NOT reply no if you see any task status is pending!
         If all task status is completed, check if the tool result is valid without any error, if not, REPLY yes to continue troubleshooting!
         If you think you have done all the tasks and all things you can do but not sure if the issue is resolved or not, REPLY no to complete the troubleshooting process and user can check the result!
         Should the agent continue troubleshooting? (ONLY REPLY yes/no)!
@@ -850,16 +879,18 @@ class ReactAgent:
     
     def detect_and_generate_plan(self, user_query: str) -> Dict[str, Any]:
         """Generate a troubleshooting plan without executing it."""
+        self.logger.info(f"Received user query: {user_query}")
         #Detect if a user query is a troubleshooting request or not.
         #If not, exit the program
         Prompt = ChatPromptTemplate.from_template("""
-        You are an AI assistant helping to troubleshoot a user query.
+        You are a Windows Operating System troubleshooting assistant helping to troubleshoot a user query.
         The user query is: {user_query}
-        Is the user query a troubleshooting request? (ONLY REPLY yes/no)!
+        Is the user query a Windows OS related troubleshooting request? (ONLY REPLY yes/no)!
         """)
         chain = Prompt | self.llm | StrOutputParser()
         is_troubleshooting_request = chain.invoke({"user_query": user_query})
         if is_troubleshooting_request.lower() != "yes":
+            self.logger.warning("User query identified as non-troubleshooting request.")
             self.console.print("[bold red]Error: This is a desktop issue troubleshooting assistant, please raise questions about desktop issues only![/bold red]")
             exit(1)
 

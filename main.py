@@ -8,10 +8,12 @@ from rich.live import Live
 from rich.progress import Progress, SpinnerColumn, TextColumn
 from agent.react_agent import ReactAgent
 from agent.memory import SQLiteMemory
+from utils.logger import setup_logger
 import json
 
 class WindowsTroubleshootingUI:
     def __init__(self):
+        self.logger = setup_logger(name="WindowsTroubleshootingUI")
         self.console = Console()
         self.memory = SQLiteMemory()
         self.agent = ReactAgent(self.memory, self)  # 传入UI实例
@@ -19,6 +21,7 @@ class WindowsTroubleshootingUI:
     
     def display_welcome(self):
         """Display welcome message."""
+        self.logger.info("Starting Windows Troubleshooting Agent UI")
         self.console.clear()
         welcome_panel = Panel(
             "Windows OS Troubleshooting Agent\n\n"+
@@ -206,8 +209,11 @@ class WindowsTroubleshootingUI:
         while True:
             user_query = self.get_user_query()
             if not user_query or user_query.lower() in ["exit", "quit", "q"]:
+                self.logger.info("User requested to exit.")
                 self.console.print("\n[bold green]Good bye!\n\nThank you for using the Windows OS Troubleshooting Agent!\n\n[/bold green]")
                 break
+            
+            self.logger.info(f"User query received in UI: {user_query}")
             
             # Generate plan
             with self.console.status("[bold green]Generating plan...[/bold green]") as status:
@@ -217,9 +223,11 @@ class WindowsTroubleshootingUI:
             self.display_plan(plan_result["plan"])
             
             if not self.get_human_confirmation():
+                self.logger.info("Plan execution canceled by user.")
                 self.console.print("\n[bold red]Plan execution canceled.[/bold red]")
                 continue
             
+            self.logger.info("Plan execution confirmed by user.")
             # Create initial state for full execution
             import uuid
             plan_id = str(uuid.uuid4())
@@ -245,12 +253,12 @@ class WindowsTroubleshootingUI:
             config = {"recursion_limit": 200}
             current_state = initial_state
             max_iterations = 200
-            iteration_count = 0
+            #iteration_count = 0
             
-            while iteration_count < max_iterations:
-                iteration_count += 1
+            #while iteration_count < max_iterations:
+            #    iteration_count += 1
                 # Invoke the graph to get the next state
-                current_state = self.agent.graph.invoke(current_state, config=config)
+            current_state = self.agent.graph.invoke(current_state, config=config)
                 
                 # Check if there's a pending tool execution that needs user confirmation
                 #if current_state.get("pending_tool_execution"):
@@ -281,7 +289,7 @@ class WindowsTroubleshootingUI:
                     #self.display_plan_modifications(observation_dict)
             
             # Display final result
-            self.display_final_result(current_state["Plan"])
+            #self.display_final_result(current_state["Plan"])
             
             # Ask if user wants to troubleshoot another issue
             self.console.print()

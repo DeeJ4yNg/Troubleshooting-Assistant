@@ -7,6 +7,13 @@ try:
     import winreg
 except ImportError:
     winreg = None
+
+try:
+    import docx
+    DOCX_AVAILABLE = True
+except ImportError:
+    DOCX_AVAILABLE = False
+
 from typing import List, Dict, Any, Optional
 from ddgs import DDGS
 from agent.memory import SQLiteMemory
@@ -15,6 +22,32 @@ from agent.knowledge_manager import KnowledgeManager
 # 配置日志记录器
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+def generate_embedding(text: str, model_type: Optional[str] = None) -> List[float]:
+    """生成文本的嵌入向量
+    
+    Args:
+        text: 输入文本
+        model_type: 模型类型 ("openai" 或 None)
+        
+    Returns:
+        嵌入向量列表
+    """
+    try:
+        if model_type == "openai":
+            import openai
+            response = openai.Embedding.create(
+                input=text,
+                model="text-embedding-ada-002"
+            )
+            return response['data'][0]['embedding']
+        
+        # 如果没有嵌入模型，返回默认向量
+        # 注意：在实际应用中，应该使用适当的嵌入模型
+        return [0.0] * 1536
+    except Exception as e:
+        logger.error(f"Failed to generate embedding: {e}")
+        return [0.0] * 1536
 
 class ListLogFilesTool:
     name = "list_log_files"
@@ -118,7 +151,7 @@ class OnlineSearchTool:
     name = "online_search"
     description = "Search the internet using DuckDuckGo for the given query. Example: {{\"query\": \"Windows 11 Settings app not opening fix\", \"max_results\": 3}} to search for troubleshooting solutions."
     
-    def __call__(self, query: str, max_results: int = 10) -> List[Dict[str, str]]:
+    def __call__(self, query: str, max_results: int = 5) -> List[Dict[str, str]]:
         """Search the internet using DuckDuckGo."""
         try:
             with DDGS() as ddgs:
@@ -141,61 +174,41 @@ class KnowledgeRetrievalTool:
     description = "Retrieve knowledge from the knowledge base using hybrid search (BM25 + ANN). Example: {{'query': 'Windows Settings app repair methods', 'limit': 5}} to retrieve relevant information."
     
     def __init__(self):
-        """init knowledge retrieval tool"""
+        """初始化知识库检索工具。"""
         try:
+            # 使用KnowledgeManager代替SQLiteMemory
             self.knowledge_manager = KnowledgeManager()
+            # 尝试导入嵌入模型
             self.embedding_model = self._init_embedding_model()
             logger.info("KnowledgeRetrievalTool initialized successfully")
         except Exception as e:
             logger.error(f"Failed to initialize KnowledgeRetrievalTool: {e}")
+            # 创建一个简单的备份实现，只支持关键词搜索
             self.knowledge_manager = None
     
     def _init_embedding_model(self) -> Optional[Any]:
-        """init embedding model"""
+        """初始化嵌入模型"""
         try:
+            # 尝试导入OpenAI模型（如果可用）
             try:
                 import openai
+                # 检查API密钥
                 if os.environ.get("OPENAI_API_KEY"):
                     return "openai"
             except ImportError:
                 pass
-            
             return None
         except Exception:
             return None
     
-    def _generate_embedding(self, text: str) -> Optional[List[float]]:
-        """生成文本的嵌入向量"""
-        try:
-            from langchain.embeddings import OpenAIEmbeddings
-            embeddings = OpenAIEmbeddings(
-                openai_api_key=os.getenv("OPENAI_API_KEY"),
-                model=os.getenv("OPENAI_EMBEDDING_MODEL"),
-                base_url=os.getenv("OPENAI_API_BASE")
-            )
-            return embeddings.embed_query(text)
-        except Exception as e:
-            logger.error(f"Failed to generate embedding: {e}")
-            return None
-    
     def __call__(self, query: str, limit: int = 5, alpha: float = 0.5) -> List[Dict[str, Any]]:
-        """Use Hybrid search to retrieve knowledge
-        
-        Args:
-            query: query text
-            limit: number of results
-            alpha: vector search weight (0-1), BM25 weight is 1-alpha
-            
-        Returns:
-            search results list
-        """
-
+        """使用混合搜索检索知识"""
+        # 验证输入参数
         if not query or not isinstance(query, str):
             logger.error("Invalid query parameter")
             return []
         
         limit = max(1, min(100, int(limit)))
-        
         alpha = max(0.0, min(1.0, float(alpha)))
         
         try:
@@ -203,10 +216,11 @@ class KnowledgeRetrievalTool:
                 logger.error("Knowledge manager is not initialized")
                 return []
             
-            try: 
-                query_embedding = self._generate_embedding(query)
+            try:
+                # 生成查询嵌入向量
+                query_embedding = generate_embedding(query, self.embedding_model)
                 
-                # Hybrid search
+                # 执行混合搜索
                 results = self.knowledge_manager.hybrid_search(
                     query=query,
                     query_embedding=query_embedding,
@@ -214,7 +228,6 @@ class KnowledgeRetrievalTool:
                     alpha=alpha
                 )
                 
-                # formatted result
                 formatted_results = []
                 for result in results:
                     formatted_results.append({
@@ -229,14 +242,11 @@ class KnowledgeRetrievalTool:
             except Exception as hybrid_error:
                 logger.warning(f"Hybrid search failed, falling back to BM25: {hybrid_error}")
                 
-                # If hybrid search failed, return to BM25
+                # 如果混合搜索失败，回退到BM25搜索
                 try:
-                    # try BM25
                     bm25_results = self.knowledge_manager.search_bm25(query, limit)
-                    # get details
                     detailed_results = []
                     for doc_id, score in bm25_results:
-                        # Check details
                         try:
                             knowledge_item = self.knowledge_manager.get_knowledge_by_id(doc_id)
                             if knowledge_item:
@@ -254,41 +264,88 @@ class KnowledgeRetrievalTool:
                     logger.info("BM25 search completed successfully")
                     return detailed_results
                 except Exception as bm25_error:
-                    logger.warning(f"BM25 search failed, falling back to simple search: {bm25_error}")
-                    
-                    try:
-                        import sqlite3
-                        db_path = getattr(self.knowledge_manager, 'db_path', ':memory:')
-                        conn = sqlite3.connect(db_path)
-                        cursor = conn.cursor()
-                        
-                        cursor.execute('''
-                        SELECT id, topic, content, source, created_at 
-                        FROM knowledge_items 
-                        WHERE topic LIKE ? OR content LIKE ? 
-                        LIMIT ?
-                        ''', (f"%{query}%", f"%{query}%", limit))
-                        
-                        results = cursor.fetchall()
-                        conn.close()
-                        
-                        simple_results = [{
-                            "id": result[0],
-                            "topic": result[1],
-                            "content": result[2],
-                            "source": result[3],
-                            "created_at": result[4],
-                            "score": 1.0
-                        } for result in results]
-                        
-                        logger.info("Simple SQL search completed successfully")
-                        return simple_results
-                    except Exception as simple_error:
-                        logger.error(f"Simple SQL search failed: {simple_error}")
-                        return []
+                    logger.warning(f"BM25 search failed: {bm25_error}")
+                    return []
         except Exception as e:
             logger.error(f"Unexpected error during knowledge retrieval: {e}")
             return []
+
+class IngestKnowledgeTool:
+    name = "ingest_knowledge"
+    description = "Ingest knowledge from a file (supported formats: .docx, .txt, .md). Example: {'file_path': 'C:/docs/guide.docx', 'topic': 'Troubleshooting Guide'}"
+    
+    def __init__(self):
+        self.knowledge_manager = KnowledgeManager()
+        # Initialize embedding model same as retrieval tool
+        self.embedding_model = self._init_embedding_model()
+        
+    def _init_embedding_model(self) -> Optional[Any]:
+        """初始化嵌入模型"""
+        try:
+            try:
+                import openai
+                if os.environ.get("OPENAI_API_KEY"):
+                    return "openai"
+            except ImportError:
+                pass
+            return None
+        except Exception:
+            return None
+
+    def __call__(self, file_path: str, topic: str = "General Knowledge") -> str:
+        """Read file and add to knowledge base."""
+        if not os.path.exists(file_path):
+            return f"Error: File '{file_path}' does not exist"
+        
+        ext = os.path.splitext(file_path)[1].lower()
+        content = ""
+        
+        try:
+            if ext == ".docx":
+                if not DOCX_AVAILABLE:
+                    return "Error: python-docx module not available. Cannot read .docx files."
+                doc = docx.Document(file_path)
+                content = "\n".join([p.text for p in doc.paragraphs if p.text.strip()])
+            elif ext in [".txt", ".md"]:
+                with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+                    content = f.read()
+            else:
+                return f"Error: Unsupported file extension '{ext}'"
+            
+            if not content.strip():
+                return f"Error: File '{file_path}' is empty"
+            
+            # Chunking logic
+            chunk_size = 1000
+            chunk_overlap = 200
+            
+            # Simple chunking
+            chunks = []
+            start = 0
+            while start < len(content):
+                end = start + chunk_size
+                chunk = content[start:end]
+                chunks.append(chunk)
+                start += chunk_size - chunk_overlap
+            
+            # Add chunks to knowledge base
+            added_count = 0
+            for i, chunk in enumerate(chunks):
+                chunk_topic = f"{topic} - Part {i+1}/{len(chunks)}"
+                embedding = generate_embedding(chunk, self.embedding_model)
+                
+                self.knowledge_manager.add_knowledge(
+                    topic=chunk_topic,
+                    content=chunk,
+                    source=os.path.basename(file_path),
+                    embedding=embedding
+                )
+                added_count += 1
+                
+            return f"Successfully ingested '{file_path}' into knowledge base. Added {added_count} chunks."
+            
+        except Exception as e:
+            return f"Error processing file: {str(e)}"
 
 class CheckRegistryKeyTool:
     name = "check_registry_key"
@@ -478,6 +535,14 @@ class RunCmdCommandTool:
         except Exception as e:
             return f"Error executing command: {str(e)}"
 
+class ReportResultTool:
+    name = "report_result"
+    description = "Report the final result of the troubleshooting process."
+    
+    def __call__(self, summary: str, result: str) -> str:
+        """Report the final result."""
+        return f"Report generated successfully.\nSummary: {summary}\nResult: {result}"
+
 # Create tool instances
 memory = SQLiteMemory()
 
@@ -486,19 +551,24 @@ read_error_logs_tool = ReadErrorLogsTool()
 write_ps1_file_tool = WritePS1FileTool()
 run_ps1_test_tool = RunPS1TestTool()
 online_search_tool = OnlineSearchTool()
-knowledge_retrieval_tool = KnowledgeRetrievalTool()
+knowledge_retrieval_tool = KnowledgeRetrievalTool()  # 不再需要传入memory参数
 check_registry_key_tool = CheckRegistryKeyTool()
 modify_registry_key_tool = ModifyRegistryKeyTool()
 run_cmd_command_tool = RunCmdCommandTool()
+ingest_knowledge_tool = IngestKnowledgeTool()
+report_result_tool = ReportResultTool()
+
 # Tool registry for easy access
 tools = {
     "list_log_files": list_log_files_tool,
     "read_error_logs": read_error_logs_tool,
     "write_ps1_file": write_ps1_file_tool,
     "run_ps1_test": run_ps1_test_tool,
+    "run_cmd_command": run_cmd_command_tool,
     "online_search": online_search_tool,
     "knowledge_retrieval": knowledge_retrieval_tool,
+    "ingest_knowledge": ingest_knowledge_tool,
     "check_registry_key": check_registry_key_tool,
     "modify_registry_key": modify_registry_key_tool,
-    "run_cmd_command": run_cmd_command_tool
+    "report_result": report_result_tool
 }
