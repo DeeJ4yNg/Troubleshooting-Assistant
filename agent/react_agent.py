@@ -187,7 +187,7 @@ class ReactAgent:
         4. Each task must have a clear description.
         5. The plan must be executable using the available tools.
         6. Avoid any dangerous actions that could cause system restart/shutdown/damage/data loss.
-        7. Always use knowledge_retrieval tool to search from internal knowledge base as Task 1 and use online_search tool to search from Internet for relevant information as Task 2!!!
+        7. Always use knowledge_retrieval tool to search from internal knowledge base as Task 1!!!
         """)
         
         if state.get("plan"):
@@ -524,7 +524,7 @@ class ReactAgent:
             # Format conversation history for the prompt
             conversation_history_text = "\n".join([
                 f"Task {msg.get('task_id', 'N/A')} ({msg.get('tool', 'N/A')}): {msg['content']}" 
-                for msg in state.get("conversation_history", [])[-10:]  # Include last 10 messages to keep context manageable
+                for msg in state.get("conversation_history", [])[-12:]  # Include last 12 messages to keep context manageable
             ])
             
             with self.console.status("[bold green]Analyzing tool result...[/bold green]") as status:
@@ -640,8 +640,9 @@ class ReactAgent:
              for task in plan_tasks:
                  if task.get("task_id") == task_id:
                      # Update status just in case, and add result/reason
+                     print(observation.get("success", False))
                      task["status"] = "completed"
-                     task["result"] = "success" if observation.get("success", False) else "failure"
+                     task["result"] = "success" if observation.get("success", False) == True else "failure"
                      
                      # Use LLM analysis or details as reason
                      llm_analysis = observation.get("llm_analysis", "")
@@ -803,15 +804,17 @@ class ReactAgent:
     
     def _should_continue(self, state: AgentState) -> str:
         """Determine if the agent should continue or complete the troubleshooting process."""
-        # Check if all tasks are completed
+
+        # Control the task len to be less than 12
         tasks = state["plan"].get("tasks", [])
+        if len(tasks) > 12:
+            print(f"Number of tasks: {len(tasks)}")
+            return "complete"
+
+        # Check if all tasks are completed
         all_completed = all(task.get("status") == "completed" for task in tasks)
         if not all_completed:
             return "continue"
-
-        # Check if the length of task is larger than 10, if so, complete the troubleshooting process
-        if len(tasks) > 10:
-            return "complete"
         
         #print("Checking completion status with current plan...")
         #print(state["plan"])
