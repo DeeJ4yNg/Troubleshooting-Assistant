@@ -208,7 +208,7 @@ Contributions are welcome! Areas for improvement:
 - **Enhanced troubleshooting workflows**
 - **Better UI/UX improvements**
 - **Additional LLM provider integrations**
-- **Knowledge base expansion**
+- **Memory and Knowledge base design**
 - **Performance optimizations**
 
 Please submit issues or pull requests with detailed descriptions.
