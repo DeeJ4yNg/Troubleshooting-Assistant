@@ -300,5 +300,6 @@ class WindowsTroubleshootingUI:
 
 if __name__ == "__main__":
     ui = WindowsTroubleshootingUI()
-    ui.agent.print_mermaid_workflow()
+    #ui.agent.print_mermaid_workflow()
     ui.run()
+
