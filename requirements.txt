@@ -10,3 +10,6 @@ openai==1.54.3
 numpy==2.0.2
 hnswlib==0.8.0
 annoy==1.17.3
+pydantic==2.10.3
+typing_extensions==4.12.2
+faiss-cpu==1.9.0
