@@ -5,19 +5,18 @@ An intelligent AI-powered agent that helps diagnose and troubleshoot Windows OS 
 ## Features
 
 - **AI-Powered Troubleshooting**: Uses advanced language models to understand user problems and generate comprehensive troubleshooting plans
-- **Automated Diagnostics**: Executes PowerShell scripts and system checks to identify root causes
+- **Automated Diagnostics**: Executes custom scripts and system checks to identify root causes
 - **Adaptive Planning**: Dynamically modifies troubleshooting plans based on tool execution results
 - **Intelligent Observation**: Analyzes tool outputs with LLM assistance to make informed decisions
 - **Interactive Interface**: Rich command-line interface with clear progress indicators and results
 - **Human-in-the-Loop**: Requires user confirmation before executing potentially impactful actions
-- **Persistent Memory**: Remembers past interactions for improved troubleshooting over time
 - **Knowledge Base**: Built-in knowledge management system for storing and retrieving troubleshooting information
 
 ## Prerequisites
 
 - **Operating System**: Windows 10/11 (required for Windows-specific diagnostics)
 - **Python**: 3.11 or higher
-- **API Access**: LLM service API key (OpenAI, or compatible providers)
+- **API Access**: Inferencing service API key (OpenAI, or compatible providers)
 
 ## Quick Start
 
@@ -26,7 +25,7 @@ An intelligent AI-powered agent that helps diagnose and troubleshoot Windows OS 
 1. **Clone and navigate to the project:**
    ```bash
    git clone <repository-url>
-   cd MyAgent_AutoDesktopFixer_SingleAgent
+   cd MyAgent_AutoFixer_SingleAgent
    ```
 
 2. **Create and activate conda environment:**
@@ -50,7 +49,7 @@ An intelligent AI-powered agent that helps diagnose and troubleshoot Windows OS 
 2. **Clone and setup project:**
    ```bash
    git clone <repository-url>
-   cd MyAgent_AutoDesktopFixer_SingleAgent
+   cd MyAgent_AutoFixer_SingleAgent
    ```
 
 3. **Create virtual environment and install dependencies:**
@@ -72,7 +71,7 @@ An intelligent AI-powered agent that helps diagnose and troubleshoot Windows OS 
 1. **Setup project:**
    ```bash
    git clone <repository-url>
-   cd MyAgent_AutoDesktopFixer_SingleAgent
+   cd MyAgent_AutoFixer_SingleAgent
    python -m venv venv
    ```
 
@@ -94,8 +93,6 @@ An intelligent AI-powered agent that helps diagnose and troubleshoot Windows OS 
    ```env
    # Required: Your LLM API key
    OPENAI_API_KEY="your-api-key-here"
-   
-   # Optional: Model configuration (defaults shown)
    OPENAI_MODEL="gpt-4o-mini"
    OPENAI_API_BASE="https://api.openai.com/v1"
    ```
@@ -130,16 +127,16 @@ Add custom troubleshooting knowledge to the agent's knowledge base.
 
 ## How It Works
 
-1. **Problem Analysis**: The agent uses LLM to understand your issue and create a step-by-step troubleshooting plan
+1. **Problem Analysis**: The agent tries to understand your issue and create a step-by-step troubleshooting plan
 2. **Tool Selection**: Automatically selects appropriate diagnostic tools based on the problem:
    - Online search for known solutions
    - Log analysis for system errors
-   - PowerShell script execution for system checks
+   - Script execution for system checks
    - Knowledge retrieval for best practices
    - Registry analysis for system settings
-3. **Execution**: With your permission, executes the planned diagnostic actions
+3. **Execution**: With your permission, executes the current planned diagnostic actions
 4. **Observation & Adaptation**: Intelligently observes tool results and dynamically modifies plans based on findings
-5. **Reporting**: Provides clear summary of findings and recommended solutions
+5. **Reporting**: Provides summary of findings and recommended solutions
 
 ## Available Tools
 
@@ -148,7 +145,7 @@ Add custom troubleshooting knowledge to the agent's knowledge base.
 - `list_log_files`: List available system log files
 - `read_event_logs`: Read Windows event logs for error patterns
 - `write_ps1_file`: Create PowerShell scripts for system tasks
-- `run_ps1_test`: Execute PowerShell scripts safely
+- `run_ps1_test`: Execute PowerShell scripts
 - `add_knowledge`: Add new troubleshooting knowledge
 - `search_knowledge`: Search existing knowledge base
 
@@ -161,14 +158,13 @@ MyAgent_AutoDesktopFixer_SingleAgent_reconV0/
 │   ├── memory.py                  # SQLite-based memory system
 │   ├── knowledge_manager.py       # Knowledge base management
 │   ├── tools.py                   # System diagnostic tools
-│   └── tools_ingest_knowledge.py  # Knowledge ingestion tools
+│   └── prompt.py                  # Prompt templates for LLM
 ├── utils/                         # Utility modules
-│   └── config_templates.py        # Configuration templates
+│   ├── config_templates.py        # Configuration templates
+│   └── logger.py                  # Logging configuration
 ├── main.py                        # Entry point - CLI interface
-├── Add_Knowledge_Script.py       # Knowledge base management
-├── requirements.txt              # Python dependencies
-├── agent_memory.db               # Conversation memory (auto-created)
-├── knowledge_db.db               # Knowledge base (auto-created)
+├── Add_Knowledge_Script.py       # Script for adding knowledge
+├── requirements.txt              # Dependencies
 └── .env                          # API configuration (user-created)
 ```
 
@@ -177,8 +173,8 @@ MyAgent_AutoDesktopFixer_SingleAgent_reconV0/
 ### Key Components
 
 - **ReAct Agent**: Implements Reasoning-Action framework for intelligent problem-solving
-- **SQLite Memory**: Persistent conversation and learning history
-- **Rich UI**: Beautiful command-line interface with visual feedback
+- **SQLite Memory**: Persistent conversation and plan history
+- **Rich UI**: Command-line interface with visual feedback
 - **Tool System**: Extensible architecture for adding new diagnostic capabilities
 - **Knowledge Base**: Vector-based storage for troubleshooting information
 
@@ -204,14 +200,12 @@ MyAgent_AutoDesktopFixer_SingleAgent_reconV0/
 
 Contributions are welcome! Areas for improvement:
 
-- **New diagnostic tools** for Windows-specific issues
-- **Enhanced troubleshooting workflows**
-- **Better UI/UX improvements**
-- **Additional LLM provider integrations**
-- **Memory and Knowledge base design**
-- **Performance optimizations**
-
-Please submit issues or pull requests with detailed descriptions.
+- **New diagnostic tools** - Adding new tools for Windows-specific issues
+- **New Components** - MCP, Skills, Cost monitoring...
+- **Enhanced troubleshooting workflows** - Test and investigate for better solutions
+- **Better UI/UX improvements** - Frontend for better user experience
+- **Better knowledge retrieval** - More accurate and relevant solutions with modern vector databases
+- **Memory Management** - Better design and implementation for conversation, plan history and experience summary 
 
 ## License
 
@@ -222,7 +216,7 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 - Built with [LangChain](https://langchain.com) for LLM integration
 - Uses [Rich](https://rich.readthedocs.io) for beautiful command-line interface
 - Inspired by [ReAct](https://react-lm.github.io) AI frameworks
-- Knowledge management powered by vector similarity search
+- Knowledge management powered by FAISS for efficient vector similarity search
 
 ---
 

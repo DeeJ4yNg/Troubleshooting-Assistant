@@ -27,17 +27,17 @@ from dotenv import load_dotenv
 # Load environment variables
 load_dotenv()
 
-# 设置当前使用的ANN算法
+# ANN algo
 ANN_ENGINE = "faiss" if FAISS_AVAILABLE else "linear"
 
 class KnowledgeManager:
     def __init__(self, db_path="knowledge_db.db", embedding_dim=None, preferred_ann_engine=None):
-        """初始化知识库管理器
+        """init knowledge manager
         
         Args:
-            db_path: 数据库文件路径
-            embedding_dim: 嵌入向量维度（默认从环境变量读取，或为1536）
-            preferred_ann_engine: 已弃用，保留是为了兼容性
+            db_path: knowledge db path
+            embedding_dim: embedding vector dimension (default from env var, or 1536)
+            preferred_ann_engine: deprecated, kept for compatibility
         """
         self.db_path = db_path
         if embedding_dim is None:
@@ -46,19 +46,17 @@ class KnowledgeManager:
             self.embedding_dim = embedding_dim
             
         self._init_db()
-        
-        # 初始化ANN索引
+
         self._init_ann_index()
-        
-        # 初始化BM25相关数据
+
         self._init_bm25()
     
     def _init_db(self):
-        """初始化SQLite数据库表结构"""
+        """init knowledge db table structure"""
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         
-        # 创建知识表，包含向量字段
+        # Create knowledge items table
         cursor.execute('''
         CREATE TABLE IF NOT EXISTS knowledge_items (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -71,7 +69,7 @@ class KnowledgeManager:
         )
         ''')
         
-        # 创建关键词索引表
+        # Create keywords table
         cursor.execute('''
         CREATE TABLE IF NOT EXISTS keywords (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -82,7 +80,7 @@ class KnowledgeManager:
         )
         ''')
         
-        # 创建全文搜索虚拟表（使用FTS5）
+        # Create full-text search virtual table
         cursor.execute('''
         CREATE VIRTUAL TABLE IF NOT EXISTS knowledge_fts USING fts5(
             topic, 
@@ -92,7 +90,7 @@ class KnowledgeManager:
         )
         ''')
         
-        # 创建触发器以保持FTS表更新
+        # Create triggers to keep FTS table updated
         cursor.execute('''
         CREATE TRIGGER IF NOT EXISTS knowledge_ai AFTER INSERT ON knowledge_items BEGIN
             INSERT INTO knowledge_fts(rowid, topic, content) 
@@ -117,15 +115,15 @@ class KnowledgeManager:
         conn.close()
     
     def _init_ann_index(self):
-        """初始化ANN索引"""
+        """init ann index"""
         try:
             self.id_map = {} # Map FAISS internal IDs to database IDs
             self.reverse_id_map = {} # Map database IDs to FAISS internal IDs
             
             if ANN_ENGINE == "faiss":
                 # Create FAISS index
-                # We use IndexFlatL2 for exact search or IndexIVFFlat for faster search on large datasets
-                # Here we use IndexFlatL2 for simplicity and accuracy on smaller datasets
+                # Use IndexFlatL2 for exact search or IndexIVFFlat for faster search on large datasets
+                # Use IndexFlatL2 for simplicity and accuracy on smaller datasets
                 self.index = faiss.IndexFlatL2(self.embedding_dim)
             elif ANN_ENGINE == "linear":
                 # Linear search doesn't need pre-built index
@@ -133,56 +131,56 @@ class KnowledgeManager:
                 self.linear_embeddings = []
                 self.linear_ids = []
             
-            # 加载现有数据到索引
+            # Rebuild index from existing data
             self._rebuild_ann_index()
         except Exception as e:
             print(f"Warning: Failed to initialize {ANN_ENGINE} index: {e}")
             self.index = None
     
     def _init_bm25(self):
-        """初始化BM25相关参数"""
-        # BM25参数
+        """init bm25 index"""
+
         self.k1 = 1.5
         self.b = 0.75
-        # 计算语料库统计信息
+        # Update BM25 statistics from existing knowledge items
         self._update_bm25_stats()
     
     def chunk_text(self, text: str, chunk_size: int = 1000, chunk_overlap: int = 200, 
                    splitter_type: str = "recursive", token_based: bool = False) -> List[str]:
-        """使用langchain对文本进行分块
+        """Chunk text using langchain
         
         Args:
-            text: 要分块的文本
-            chunk_size: 每块的最大长度
-            chunk_overlap: 块之间的重叠长度
-            splitter_type: 分块器类型 ('recursive', 'character')
-            token_based: 是否基于token计数（仅在langchain可用时有效）
+            text: Text to be chunked
+            chunk_size: Maximum length of each chunk
+            chunk_overlap: Overlap length between chunks
+            splitter_type: Type of splitter ('recursive', 'character')
+            token_based: Whether to use token-based splitting (only effective when langchain is available)
             
         Returns:
-            分块后的文本列表
+            List of chunked text
         """
-        # 如果文本较短，直接返回原文
+        # If text is shorter than chunk size, return original text
         if len(text) <= chunk_size:
             return [text]
         
-        # 如果langchain可用，使用langchain的分块器
+        # If langchain is available, use langchain's text splitter
         if LANGCHAIN_AVAILABLE:
             try:
                 if token_based:
-                    # 使用基于token的分块器
+                    # Use token-based splitter
                     splitter = TokenTextSplitter(
                         chunk_size=chunk_size,
                         chunk_overlap=chunk_overlap
                     )
                 elif splitter_type == "character":
-                    # 使用基于字符的分块器
+                    # Use character-based splitter
                     splitter = CharacterTextSplitter(
                         chunk_size=chunk_size,
                         chunk_overlap=chunk_overlap,
                         separator="\n\n"
                     )
                 else:
-                    # 默认使用递归字符分块器
+                    # Default to recursive character splitter
                     splitter = RecursiveCharacterTextSplitter(
                         chunk_size=chunk_size,
                         chunk_overlap=chunk_overlap,
@@ -192,22 +190,22 @@ class KnowledgeManager:
                 return splitter.split_text(text)
             except Exception as e:
                 print(f"Warning: Langchain text splitting failed: {e}")
-                # 失败时回退到简单分块
+                # Fallback to simple chunking if langchain fails
         
-        # 简单分块回退策略
+        # Simple chunking fallback strategy
         chunks = []
         start = 0
         while start < len(text):
             end = min(start + chunk_size, len(text))
-            # 尝试在句子边界处分割
+            # If end is not at the end of text, try to find a natural break point
             if end < len(text):
-                # 寻找最近的句号、问号或感叹号
+                # Find the last punctuation mark before the end of chunk
                 last_punctuation = max(
                     text.rfind('.', start, end),
                     text.rfind('?', start, end),
                     text.rfind('!', start, end)
                 )
-                if last_punctuation > start + chunk_size * 0.8:  # 确保至少80%的块大小
+                if last_punctuation > start + chunk_size * 0.8:  # If punctuation is in the last 20% of chunk, move end to punctuation
                     end = last_punctuation + 1
             chunks.append(text[start:end].strip())
             start = end - chunk_overlap
@@ -215,12 +213,12 @@ class KnowledgeManager:
         return chunks
     
     def _rebuild_ann_index(self):
-        """重建ANN索引"""
+        """Rebuild ANN index from existing knowledge items"""
         try:
             conn = sqlite3.connect(self.db_path)
             cursor = conn.cursor()
             
-            # 获取所有知识项及其嵌入向量
+            # Fetch all knowledge items with embeddings
             cursor.execute('SELECT id, embedding FROM knowledge_items WHERE embedding IS NOT NULL')
             results = cursor.fetchall()
             
@@ -283,11 +281,11 @@ class KnowledgeManager:
             print(f"Warning: Failed to rebuild {ANN_ENGINE} index: {e}")
     
     def _update_bm25_stats(self):
-        """更新BM25统计信息"""
+        """Update BM25 statistics from existing knowledge items"""
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         
-        # 获取所有文档
+        # Fetch all documents
         cursor.execute('SELECT id, content FROM knowledge_items')
         docs = cursor.fetchall()
         
@@ -301,7 +299,7 @@ class KnowledgeManager:
         
         self.doc_count = len(docs)
         
-        # 计算平均文档长度和词频
+        # Calculate average document length and word frequency
         total_len = 0
         self.word_freq = {}
         
@@ -309,7 +307,7 @@ class KnowledgeManager:
             words = self._tokenize(content)
             total_len += len(words)
             
-            # 统计词频
+            # Update word frequency
             doc_word_set = set(words)
             for word in doc_word_set:
                 if word not in self.word_freq:
@@ -319,10 +317,10 @@ class KnowledgeManager:
         self.avg_doc_len = total_len / self.doc_count if self.doc_count > 0 else 0
     
     def _tokenize(self, text: str) -> List[str]:
-        """将文本分词"""
-        # 转为小写并移除非字母数字字符
+        """Tokenize text into words, removing punctuation and stop words"""
+        # Convert to lowercase and remove non-alphanumeric characters
         text = re.sub(r'[^\w\s]', '', text.lower())
-        # 分词并移除停用词（简单实现）
+        # Tokenize and remove stop words (simple implementation)
         stop_words = {'the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for', 'of', 'with', 'by'}
         words = [word for word in text.split() if word not in stop_words and len(word) > 1]
         return words
@@ -330,25 +328,25 @@ class KnowledgeManager:
     def add_knowledge(self, topic: str, content: str, source: str = "system", embedding: Optional[List[float]] = None, 
                      auto_chunk: bool = False, chunk_size: int = 1000, chunk_overlap: int = 200, 
                      chunk_splitter_type: str = "recursive", token_based_chunking: bool = False) -> List[int]:
-        """添加知识项，支持自动分块大文档
+        """Add knowledge item, supporting automatic chunking of large documents
         
         Args:
-            topic: 主题
-            content: 内容
-            source: 来源
-            embedding: 可选的嵌入向量（如果提供，将用于所有块）
-            auto_chunk: 是否自动分块大文档
-            chunk_size: 分块大小
-            chunk_overlap: 块之间的重叠大小
-            chunk_splitter_type: 分块器类型 ('recursive', 'character')
-            token_based_chunking: 是否基于token计数分块
+            topic: main topic of the knowledge item
+            content: content of the knowledge item
+            source: source of the knowledge item
+            embedding: optional embedding vector (if provided, will be used for all chunks)
+            auto_chunk: whether to automatically chunk large documents
+            chunk_size: chunk size for automatic chunking
+            chunk_overlap: overlap size between chunks
+            chunk_splitter_type: type of chunk splitter ('recursive', 'character')
+            token_based_chunking: whether to chunk based on token count (True) or character count (False)
             
         Returns:
-            添加的知识项ID列表
+            list of IDs of the added knowledge items
         """
-        # 检查是否需要分块
+        # Check if chunking is needed
         if auto_chunk and len(content) > chunk_size:
-            # 对内容进行分块
+            # Chunk the content
             chunks = self.chunk_text(
                 content,
                 chunk_size=chunk_size,
@@ -357,46 +355,46 @@ class KnowledgeManager:
                 token_based=token_based_chunking
             )
             
-            # 为每个块添加知识项
+            # Add each chunk as a separate knowledge item
             knowledge_ids = []
             for i, chunk in enumerate(chunks):
-                # 为每个块生成唯一的子主题
+                # Generate unique sub-topic for each chunk
                 chunk_topic = f"{topic} - Part {i+1}/{len(chunks)}"
-                # 添加块内容
+                # Add chunk content
                 chunk_id = self._add_single_knowledge_item(chunk_topic, chunk, source, embedding)
                 knowledge_ids.append(chunk_id)
             
             return knowledge_ids
         else:
-            # 不进行分块，直接添加完整内容
+            # Add the full content as a single knowledge item
             knowledge_id = self._add_single_knowledge_item(topic, content, source, embedding)
             return [knowledge_id]
     
     def _add_single_knowledge_item(self, topic: str, content: str, source: str, embedding: Optional[List[float]] = None) -> int:
-        """添加单个知识项
+        """Add a single knowledge item to the database
         
         Args:
-            topic: 主题
-            content: 内容
-            source: 来源
-            embedding: 可选的嵌入向量
+            topic: Topic of the knowledge item
+            content: Content of the knowledge item
+            source: Source of the knowledge item
+            embedding: Optional embedding vector
             
         Returns:
-            新添加知识项的ID
+            ID of the newly added knowledge item
         """
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         
         timestamp = datetime.now().isoformat()
         
-        # 处理嵌入向量
+        # Process embedding vector
         embedding_blob = None
         if embedding:
-            # 转换为numpy数组并序列化为二进制
+            # Convert to numpy array and serialize to binary
             embedding_array = np.array(embedding, dtype=np.float32)
             embedding_blob = embedding_array.tobytes()
         
-        # 插入知识项
+        # Insert knowledge item
         cursor.execute('''
         INSERT INTO knowledge_items (topic, content, source, embedding, created_at, updated_at)
         VALUES (?, ?, ?, ?, ?, ?)
@@ -404,13 +402,13 @@ class KnowledgeManager:
         
         knowledge_id = cursor.lastrowid
         
-        # 更新关键词表
+        # Update keywords table
         self._update_keywords(cursor, knowledge_id, content)
         
         conn.commit()
         conn.close()
         
-        # 更新索引
+        # Update index if embedding is provided
         if embedding:
             self._rebuild_ann_index()
         self._update_bm25_stats()
@@ -419,21 +417,21 @@ class KnowledgeManager:
     
     def update_knowledge(self, knowledge_id: int, topic: Optional[str] = None, 
                         content: Optional[str] = None, embedding: Optional[List[float]] = None) -> bool:
-        """更新知识项
+        """Update a knowledge item
         
         Args:
-            knowledge_id: 知识项ID
-            topic: 新主题（可选）
-            content: 新内容（可选）
-            embedding: 新嵌入向量（可选）
+            knowledge_id: ID of the knowledge item to update
+            topic: New topic (optional)
+            content: New content (optional)
+            embedding: New embedding vector (optional)
             
         Returns:
-            更新是否成功
+            Whether the update was successful
         """
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         
-        # 检查知识项是否存在
+        # Check if knowledge item exists
         cursor.execute('SELECT id FROM knowledge_items WHERE id = ?', (knowledge_id,))
         if not cursor.fetchone():
             conn.close()
@@ -441,7 +439,7 @@ class KnowledgeManager:
         
         timestamp = datetime.now().isoformat()
         
-        # 构建更新语句
+        # Build update statement
         updates = []
         params = []
         
@@ -454,7 +452,7 @@ class KnowledgeManager:
             params.append(content)
         
         if embedding is not None:
-            # 转换为numpy数组并序列化为二进制
+            # Convert to numpy array and serialize to binary
             embedding_array = np.array(embedding, dtype=np.float32)
             embedding_blob = embedding_array.tobytes()
             updates.append("embedding = ?")
@@ -464,21 +462,21 @@ class KnowledgeManager:
         params.append(timestamp)
         params.append(knowledge_id)
         
-        # 执行更新
+        # Execute update
         query = f"UPDATE knowledge_items SET {', '.join(updates)} WHERE id = ?"
         cursor.execute(query, params)
         
-        # 如果内容更新了，更新关键词表
+        # Update keywords table if content changed
         if content is not None:
-            # 删除旧关键词
+            # Delete old keywords
             cursor.execute('DELETE FROM keywords WHERE knowledge_id = ?', (knowledge_id,))
-            # 添加新关键词
+            # Add new keywords
             self._update_keywords(cursor, knowledge_id, content)
         
         conn.commit()
         conn.close()
         
-        # 更新索引
+        # Update index if embedding or content changed
         if embedding is not None or content is not None:
             self._rebuild_ann_index()
             self._update_bm25_stats()
@@ -486,47 +484,53 @@ class KnowledgeManager:
         return True
     
     def delete_knowledge(self, knowledge_id: int) -> bool:
-        """删除知识项
+        """Delete a knowledge item
         
         Args:
-            knowledge_id: 知识项ID
+            knowledge_id: ID of the knowledge item to delete
             
         Returns:
-            删除是否成功
+            Whether the deletion was successful
         """
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         
-        # 检查知识项是否存在
+        # Check if knowledge item exists
         cursor.execute('SELECT id FROM knowledge_items WHERE id = ?', (knowledge_id,))
         if not cursor.fetchone():
             conn.close()
             return False
         
-        # 删除知识项（关键词会通过外键级联删除）
+        # Delete knowledge item (keywords will be cascaded)
         cursor.execute('DELETE FROM knowledge_items WHERE id = ?', (knowledge_id,))
         
         conn.commit()
         conn.close()
         
-        # 重建索引
+        # Rebuild index
         self._rebuild_ann_index()
         self._update_bm25_stats()
         
         return True
     
     def _update_keywords(self, cursor: sqlite3.Cursor, knowledge_id: int, content: str):
-        """更新关键词表"""
+        """Update keywords table for a knowledge item
+        
+        Args:
+            cursor: Database cursor
+            knowledge_id: ID of the knowledge item
+            content: Content of the knowledge item
+        """
         words = self._tokenize(content)
         
-        # 统计词频
+        # Count word frequencies
         word_counts = {}
         for word in words:
             if word not in word_counts:
                 word_counts[word] = 0
             word_counts[word] += 1
         
-        # 插入关键词
+        # Insert keywords
         for word, freq in word_counts.items():
             cursor.execute('''
             INSERT INTO keywords (knowledge_id, keyword, frequency)
@@ -534,7 +538,14 @@ class KnowledgeManager:
             ''', (knowledge_id, word, freq))
     
     def get_knowledge_by_id(self, knowledge_id: int) -> Optional[Dict[str, Any]]:
-        """根据ID获取知识项"""
+        """Get a knowledge item by ID
+        
+        Args:
+            knowledge_id: ID of the knowledge item to retrieve
+            
+        Returns:
+            Dictionary containing knowledge item details or None if not found
+        """
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         
@@ -559,19 +570,19 @@ class KnowledgeManager:
         return None
     
     def search_bm25(self, query: str, limit: int = 5) -> List[Tuple[int, float]]:
-        """使用BM25算法搜索
+        """Search knowledge items using BM25 algorithm
         
         Args:
-            query: 查询文本
-            limit: 返回结果数量限制
+            query: Query text
+            limit: Maximum number of results to return
             
         Returns:
-            [(知识ID, 分数)] 的列表
+            List of tuples containing (knowledge_id, score)
         """
         if self.doc_count == 0:
             return []
         
-        # 分词查询
+        # Tokenize query
         query_words = self._tokenize(query)
         if not query_words:
             return []
@@ -579,7 +590,7 @@ class KnowledgeManager:
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         
-        # 获取所有文档
+        # Fetch all documents
         cursor.execute('SELECT id, content FROM knowledge_items')
         docs = cursor.fetchall()
         
@@ -589,40 +600,40 @@ class KnowledgeManager:
             doc_words = self._tokenize(content)
             doc_len = len(doc_words)
             
-            # 计算BM25分数
+            # Calculate BM25 score
             score = 0
             for word in query_words:
-                # 计算词在文档中的频率
+                # Calculate term frequency in document
                 tf = doc_words.count(word)
-                # 计算逆文档频率
+                # Calculate inverse document frequency
                 df = self.word_freq.get(word, 0)
                 idf = np.log((self.doc_count - df + 0.5) / (df + 0.5) + 1)
-                # 计算BM25项
+                # Calculate BM25 term
                 score += idf * (tf * (self.k1 + 1)) / (tf + self.k1 * (1 - self.b + self.b * doc_len / self.avg_doc_len))
             
             scores.append((doc_id, score))
         
         conn.close()
         
-        # 按分数排序并返回前N个
+        # Sort by score and return top N
         scores.sort(key=lambda x: x[1], reverse=True)
         return scores[:limit]
     
     def search_vector(self, query_embedding: List[float], limit: int = 5) -> List[Tuple[int, float]]:
-        """使用向量搜索（支持多种ANN算法）
+        """Search knowledge items using vector similarity search
         
         Args:
-            query_embedding: 查询向量
-            limit: 返回结果数量限制
+            query_embedding: Query vector
+            limit: Maximum number of results to return
             
         Returns:
-            [(知识ID, 相似度)] 的列表
+            List of tuples containing (knowledge_id, similarity_score)
         """
         try:
-            # 转换查询向量为numpy数组
+            # Convert query vector to numpy array
             query_vec = np.array(query_embedding, dtype=np.float32)
             
-            # 根据不同的ANN引擎执行搜索
+            # Search using FAISS if available
             if ANN_ENGINE == "faiss" and self.index is not None:
                 # Check if index is empty
                 if self.index.ntotal == 0:
@@ -655,16 +666,16 @@ class KnowledgeManager:
                 return results
                 
             elif ANN_ENGINE == "linear":
-                # 线性搜索
+                # Linear search
                 if not self.linear_embeddings.size:
                     return []
                 
-                # 计算与所有向量的余弦相似度
-                # 确保向量已经归一化以使用点积作为余弦相似度
-                # 简单实现：使用点积近似余弦相似度（如果向量已归一化）
+                # Calculate cosine similarity with all vectors
+                # Ensure vectors are normalized to use dot product as cosine similarity
+                # Simple implementation: use dot product approximation of cosine similarity (if vectors are normalized)
                 similarities = []
                 for i, embedding in enumerate(self.linear_embeddings):
-                    # 计算余弦相似度
+                    # Calculate cosine similarity
                     dot_product = np.dot(query_vec, embedding)
                     norm_product = np.linalg.norm(query_vec) * np.linalg.norm(embedding)
                     if norm_product > 0:
@@ -673,57 +684,57 @@ class KnowledgeManager:
                         similarity = 0
                     similarities.append((self.linear_ids[i], similarity))
                 
-                # 按相似度降序排序
+                # Sort by similarity score in descending order
                 similarities.sort(key=lambda x: x[1], reverse=True)
                 
-                # 返回前N个结果
+                # Return top N results
                 return similarities[:limit]
                 
         except Exception as e:
             print(f"Warning: Vector search failed with {ANN_ENGINE}: {e}")
             
-        # 所有方法都失败时返回空列表
+        # Return empty list if all methods fail
         return []
     
     def hybrid_search(self, query: str, query_embedding: Optional[List[float]] = None, 
                      limit: int = 5, alpha: float = 0.5) -> List[Dict[str, Any]]:
-        """混合搜索（BM25 + 向量搜索）
+        """Hybrid search combining BM25 and vector similarity search
         
         Args:
-            query: 查询文本
-            query_embedding: 查询向量（可选）
-            limit: 返回结果数量限制
-            alpha: 向量搜索权重（0-1），BM25权重为1-alpha
+            query: Query text
+            query_embedding: Query vector (optional)
+            limit: Maximum number of results to return
+            alpha: Weight for vector similarity search (0-1), BM25 weight is 1-alpha
             
         Returns:
-            搜索结果列表
+            List of search results with combined scores
         """
         try:
-            # 执行BM25搜索
-            bm25_results = self.search_bm25(query, limit * 2)  # 获取更多结果用于合并
+            # Execute BM25 search
+            bm25_results = self.search_bm25(query, limit * 2)  # Get more results for merging
             
-            # 执行向量搜索（如果提供了嵌入向量且ANN引擎可用）
+            # Execute vector search (if embedding is provided and ANN engine is available)
             vector_results = []
             if ANN_ENGINE != "linear" and query_embedding:
                 vector_results = self.search_vector(query_embedding, limit * 2)
             
-            # 合并结果
+            # Merge results
             combined_scores = {}
             
-            # 归一化BM25分数
+            # Normalize BM25 scores (if any results)
             if bm25_results:
                 max_bm25_score = max(score for _, score in bm25_results)
                 if max_bm25_score > 0:
                     for doc_id, score in bm25_results:
                         combined_scores[doc_id] = (1 - alpha) * (score / max_bm25_score)
                 else:
-                    # 如果所有分数都为0，使用相等的分数
+                    # if all BM25 scores are 0, use equal scores
                     for doc_id, _ in bm25_results:
                         combined_scores[doc_id] = 1.0
             
-            # 归一化向量分数并合并
+            # Normalize vector scores and merge (if any results)
             if vector_results:
-                # 找到最大向量分数用于归一化
+                # Find max vector score for normalization
                 max_vector_score = max(score for _, score in vector_results)
                 if max_vector_score > 0:
                     for doc_id, score in vector_results:
@@ -733,23 +744,23 @@ class KnowledgeManager:
                         else:
                             combined_scores[doc_id] = alpha * normalized_score
                 else:
-                    # 如果所有向量分数都为0，仍然添加这些文档但给予较低权重
+                    # if all vector scores are 0, still add these documents but give lower weight
                     for doc_id, _ in vector_results:
                         if doc_id in combined_scores:
-                            combined_scores[doc_id] += alpha * 0.1  # 给予小权重
+                            combined_scores[doc_id] += alpha * 0.1  # give lower weight
                         else:
                             combined_scores[doc_id] = alpha * 0.1
             
-            # 如果只有BM25结果，直接使用
+            # If only BM25 results, use them directly
             if not vector_results and bm25_results:
                 combined_scores = {doc_id: score for doc_id, score in bm25_results}
             
-            # 如果没有任何结果，尝试使用SQLite的FTS5全文搜索
+            # If no results from both BM25 and vector, try SQLite FTS5
             if not combined_scores:
                 conn = sqlite3.connect(self.db_path)
                 cursor = conn.cursor()
                 
-                # 使用FTS5进行全文搜索
+                # Use FTS5 for full-text search
                 cursor.execute('''
                 SELECT rowid FROM knowledge_fts 
                 WHERE knowledge_fts MATCH ? 
@@ -759,14 +770,14 @@ class KnowledgeManager:
                 fts_results = cursor.fetchall()
                 conn.close()
                 
-                # 为FTS结果分配默认分数
+                # Assign default score to FTS results
                 for row in fts_results:
                     combined_scores[row[0]] = 1.0
             
-            # 按分数排序
+            # Sort by combined score in descending order
             sorted_results = sorted(combined_scores.items(), key=lambda x: x[1], reverse=True)
             
-            # 获取详细信息
+            # Get detailed information
             final_results = []
             conn = sqlite3.connect(self.db_path)
             cursor = conn.cursor()
@@ -794,7 +805,7 @@ class KnowledgeManager:
             return final_results
         except Exception as e:
             print(f"Warning: Hybrid search failed: {e}")
-            # 失败时回退到简单的SQL查询
+            # Fallback to simple SQL query if hybrid search fails
             conn = sqlite3.connect(self.db_path)
             cursor = conn.cursor()
             
@@ -818,13 +829,13 @@ class KnowledgeManager:
             } for result in results]
     
     def list_all_knowledge(self, limit: int = 100) -> List[Dict[str, Any]]:
-        """列出所有知识项
+        """List all knowledge items
         
         Args:
-            limit: 返回结果数量限制
+            limit: Number of items to return
             
         Returns:
-            知识项列表
+            List of knowledge items
         """
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
