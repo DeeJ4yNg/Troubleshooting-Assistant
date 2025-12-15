@@ -5,7 +5,6 @@ import re
 from datetime import datetime
 from typing import List, Dict, Any, Optional, Tuple
 
-# 尝试导入langchain相关模块用于文档分块
 try:
     from langchain.text_splitter import RecursiveCharacterTextSplitter, CharacterTextSplitter, TokenTextSplitter
     LANGCHAIN_AVAILABLE = True
@@ -13,7 +12,6 @@ except ImportError:
     LANGCHAIN_AVAILABLE = False
     print("Warning: langchain not available. Text chunking functionality will be limited.")
 
-# 尝试导入faiss
 try:
     import faiss
     FAISS_AVAILABLE = True
@@ -63,7 +61,7 @@ class KnowledgeManager:
             topic TEXT,
             content TEXT,
             source TEXT,
-            embedding BLOB,  -- 存储向量的二进制数据
+            embedding BLOB,
             created_at TIMESTAMP,
             updated_at TIMESTAMP
         )
