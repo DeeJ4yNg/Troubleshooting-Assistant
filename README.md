@@ -25,7 +25,7 @@ An intelligent AI-powered agent that helps diagnose and troubleshoot Windows OS 
 1. **Clone and navigate to the project:**
    ```bash
    git clone <repository-url>
-   cd MyAgent_AutoFixer_SingleAgent
+   cd Troubleshooting-Agent
    ```
 
 2. **Create and activate conda environment:**
@@ -49,7 +49,7 @@ An intelligent AI-powered agent that helps diagnose and troubleshoot Windows OS 
 2. **Clone and setup project:**
    ```bash
    git clone <repository-url>
-   cd MyAgent_AutoFixer_SingleAgent
+   cd Troubleshooting-Agent
    ```
 
 3. **Create virtual environment and install dependencies:**
@@ -71,7 +71,7 @@ An intelligent AI-powered agent that helps diagnose and troubleshoot Windows OS 
 1. **Setup project:**
    ```bash
    git clone <repository-url>
-   cd MyAgent_AutoFixer_SingleAgent
+   cd Troubleshooting-Agent
    python -m venv venv
    ```
 
@@ -152,7 +152,7 @@ Add custom troubleshooting knowledge to the agent's knowledge base.
 ## Project Structure
 
 ```
-MyAgent_AutoDesktopFixer_SingleAgent_reconV0/
+Troubleshooting-Agent/
 ├── agent/                          # Core agent components
 │   ├── react_agent.py             # Main ReAct framework implementation
 │   ├── memory.py                  # SQLite-based memory system
