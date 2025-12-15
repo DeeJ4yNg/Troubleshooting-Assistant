@@ -141,13 +141,12 @@ Add custom troubleshooting knowledge to the agent's knowledge base.
 ## Available Tools
 
 - `online_search`: Search web for solutions to common problems
-- `check_system_updates`: Check for pending Windows updates
 - `list_log_files`: List available system log files
 - `read_event_logs`: Read Windows event logs for error patterns
 - `write_ps1_file`: Create PowerShell scripts for system tasks
 - `run_ps1_test`: Execute PowerShell scripts
 - `add_knowledge`: Add new troubleshooting knowledge
-- `search_knowledge`: Search existing knowledge base
+- `knowledge_retrieval`: Search existing knowledge base
 
 ## Project Structure
 
@@ -200,9 +199,10 @@ Troubleshooting-Agent/
 
 Contributions are welcome! Areas for improvement:
 
+- **Code Optimization**
 - **New diagnostic tools** - Adding new tools for Windows-specific issues
 - **New Components** - MCP, Skills, Cost monitoring...
-- **Enhanced troubleshooting workflows** - Test and investigate for better solutions
+- **Enhanced troubleshooting workflows** - Test and investigate for a better workflow
 - **Better UI/UX improvements** - Frontend for better user experience
 - **Better knowledge retrieval** - More accurate and relevant solutions with modern vector databases
 - **Memory Management** - Better design and implementation for conversation, plan history and experience summary 
