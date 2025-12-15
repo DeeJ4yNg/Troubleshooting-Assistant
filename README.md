@@ -1,4 +1,4 @@
-# Windows OS Troubleshooting Agent
+# Troubleshooting Assistant
 
 An intelligent AI-powered agent that helps diagnose and troubleshoot Windows OS issues using advanced language models and automated system diagnostics.
 
